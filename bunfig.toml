@@ -1,0 +1,6 @@
+[test]
+timeout = 30000
+coverage = true
+
+[install]
+exact = false

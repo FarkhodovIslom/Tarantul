@@ -1,0 +1,35 @@
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    - ~/.nanobot:/root/.nanobot
+  env_file:
+    - .env
+
+services:
+  # ── API server + chat channels ──────────────────────────────
+  nanobot-serve:
+    container_name: nanobot-serve
+    <<: *common
+    command: ["serve", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── Interactive CLI (on-demand) ─────────────────────────────
+  nanobot-cli:
+    <<: *common
+    profiles:
+      - cli
+    command: ["agent"]
+    stdin_open: true
+    tty: true

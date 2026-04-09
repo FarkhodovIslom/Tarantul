@@ -1,0 +1,10 @@
+export { BaseChannel } from "./base.js";
+export { TelegramChannel } from "./telegram.js";
+export { SlackChannel } from "./slack.js";
+export { DiscordChannel } from "./discord.js";
+export { ChannelManager } from "./manager.js";
+export { registerChannel, getChannelClass, registerBuiltins } from "./registry.js";
+export type { BaseChannelConfig } from "./base.js";
+export type { TelegramConfig } from "./telegram.js";
+export type { SlackConfig, SlackDmConfig } from "./slack.js";
+export type { DiscordConfig } from "./discord.js";
