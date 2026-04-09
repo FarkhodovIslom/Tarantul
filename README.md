@@ -16,8 +16,8 @@ Supports 25+ LLM providers, tool execution, multi-channel chat (Telegram, Slack,
 ### Install
 
 ```bash
-git clone https://github.com/your-org/nanobot-ts.git
-cd nanobot-ts
+git clone https://github.com/FarkhodovIslom/Nanobot.git
+cd Nanobot
 bun install
 ```
 
@@ -42,7 +42,7 @@ providers:
 bun run start agent
 
 # One-shot from argument
-bun run start agent -m "What is the capital of France?"
+bun run start agent -m "What is Large Language Model?"
 
 # Pipe input
 echo "Summarize this README" | bun run start agent
