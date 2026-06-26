@@ -5,7 +5,16 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { CommandRouter } from "../src/command/router.js";
 import { registerBuiltinCommands, buildHelpText } from "../src/command/builtin.js";
-import { markdownToAnsi, styled, ansi, isColorSupported, printResponse } from "../src/cli/render.js";
+import {
+  markdownToAnsi,
+  MarkdownRenderer,
+  styled,
+  ansi,
+  isColorSupported,
+  printResponse,
+  toolStatusLabel,
+  ToolStatusRenderer,
+} from "../src/cli/render.js";
 import type { CommandContext } from "../src/command/router.js";
 import type { InboundMessage } from "../src/bus/events.js";
 
@@ -313,6 +322,106 @@ describe("markdownToAnsi", () => {
 });
 
 // ---------------------------------------------------------------------------
+// markdownToAnsi — styled rendering (FORCE_COLOR)
+// ---------------------------------------------------------------------------
+
+describe("markdownToAnsi (colored)", () => {
+  const origNoColor = process.env["NO_COLOR"];
+  const origForceColor = process.env["FORCE_COLOR"];
+
+  beforeAll(() => {
+    delete process.env["NO_COLOR"];
+    process.env["FORCE_COLOR"] = "1";
+  });
+
+  afterAll(() => {
+    if (origNoColor !== undefined) process.env["NO_COLOR"] = origNoColor;
+    if (origForceColor !== undefined) process.env["FORCE_COLOR"] = origForceColor;
+    else delete process.env["FORCE_COLOR"];
+  });
+
+  // Strip ANSI escapes to assert on the visible text content.
+  const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+  it("styles bold without leaving the markers", () => {
+    const out = markdownToAnsi("This is **bold** text");
+    expect(out).toContain(ansi.bold);
+    expect(strip(out)).toBe("This is bold text");
+  });
+
+  it("renders headings without the leading hashes", () => {
+    const out = markdownToAnsi("## Title");
+    expect(strip(out)).toBe("Title");
+    expect(out).toContain(ansi.bold);
+    expect(out).toContain(ansi.cyan);
+  });
+
+  it("turns bullets into a • glyph", () => {
+    const out = markdownToAnsi("- item");
+    expect(strip(out)).toBe("• item");
+  });
+
+  it("keeps ordered-list numbers", () => {
+    const out = markdownToAnsi("1. first");
+    expect(strip(out)).toBe("1. first");
+  });
+
+  it("renders blockquotes with a gutter", () => {
+    const out = markdownToAnsi("> quoted");
+    expect(strip(out)).toBe("│ quoted");
+  });
+
+  it("renders a horizontal rule", () => {
+    const out = markdownToAnsi("---");
+    expect(strip(out)).toMatch(/^─+$/);
+  });
+
+  it("renders links as label plus url", () => {
+    const out = markdownToAnsi("see [docs](http://x.io)");
+    expect(strip(out)).toBe("see docs (http://x.io)");
+  });
+
+  it("leaves fenced code content unmodified except styling", () => {
+    const out = markdownToAnsi("```\nconst x = **not bold**;\n```");
+    expect(strip(out)).toBe("```\nconst x = **not bold**;\n```");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MarkdownRenderer — stateful streaming (FORCE_COLOR)
+// ---------------------------------------------------------------------------
+
+describe("MarkdownRenderer", () => {
+  const origNoColor = process.env["NO_COLOR"];
+  const origForceColor = process.env["FORCE_COLOR"];
+
+  beforeAll(() => {
+    delete process.env["NO_COLOR"];
+    process.env["FORCE_COLOR"] = "1";
+  });
+
+  afterAll(() => {
+    if (origNoColor !== undefined) process.env["NO_COLOR"] = origNoColor;
+    if (origForceColor !== undefined) process.env["FORCE_COLOR"] = origForceColor;
+    else delete process.env["FORCE_COLOR"];
+  });
+
+  const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+  it("tracks fenced state across separate renderLine calls", () => {
+    const r = new MarkdownRenderer();
+    expect(strip(r.renderLine("```"))).toBe("```");
+    // Inside the fence, emphasis markers are left untouched.
+    const inside = r.renderLine("- **literal**");
+    expect(strip(inside)).toBe("- **literal**");
+    expect(inside).not.toContain(ansi.bold);
+    expect(strip(r.renderLine("```"))).toBe("```");
+    // Back outside the fence, bullets render again.
+    expect(strip(r.renderLine("- item"))).toBe("• item");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // styled / isColorSupported
 // ---------------------------------------------------------------------------
 
@@ -388,5 +497,112 @@ describe("parseArgs", () => {
     const { positional, flags } = parseArgs([]);
     expect(positional).toHaveLength(0);
     expect(flags.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toolStatusLabel
+// ---------------------------------------------------------------------------
+
+describe("toolStatusLabel", () => {
+  it("write_file with path shows basename in running/done labels", () => {
+    const label = toolStatusLabel("write_file", { path: "/some/dir/foo.txt" });
+    expect(label.running).toBe("Creating foo.txt");
+    expect(label.done).toBe("File created: foo.txt");
+  });
+
+  it("write_file without path uses generic labels", () => {
+    const label = toolStatusLabel("write_file", {});
+    expect(label.running).toBe("Creating");
+    expect(label.done).toBe("File created");
+  });
+
+  it("read_file shows basename", () => {
+    const label = toolStatusLabel("read_file", { path: "/a/b/c.ts" });
+    expect(label.running).toBe("Reading c.ts");
+    expect(label.done).toBe("Read: c.ts");
+  });
+
+  it("edit_file shows basename", () => {
+    const label = toolStatusLabel("edit_file", { path: "src/main.ts" });
+    expect(label.running).toBe("Editing main.ts");
+    expect(label.done).toBe("Edited: main.ts");
+  });
+
+  it("list_dir shows basename", () => {
+    const label = toolStatusLabel("list_dir", { path: "/workspace/src" });
+    expect(label.running).toBe("Listing src");
+    expect(label.done).toBe("Listed: src");
+  });
+
+  it("exec with short command includes command snippet", () => {
+    const label = toolStatusLabel("exec", { command: "ls -la" });
+    expect(label.running).toContain("ls -la");
+    expect(label.done).toBe("Command finished");
+  });
+
+  it("exec truncates very long commands", () => {
+    const longCmd = "echo " + "x".repeat(100);
+    const label = toolStatusLabel("exec", { command: longCmd });
+    expect(label.running.length).toBeLessThan(longCmd.length + 20);
+    expect(label.running).toContain("…");
+  });
+
+  it("exec without command uses generic label", () => {
+    const label = toolStatusLabel("exec", {});
+    expect(label.running).toBe("Running command");
+  });
+
+  it("cron returns fixed labels", () => {
+    const label = toolStatusLabel("cron", {});
+    expect(label.running).toBe("Scheduling task");
+    expect(label.done).toBe("Task scheduled");
+  });
+
+  it("web_search returns fixed labels", () => {
+    const label = toolStatusLabel("web_search", {});
+    expect(label.running).toBe("Searching the web");
+    expect(label.done).toBe("Web search done");
+  });
+
+  it("web_fetch returns fixed labels", () => {
+    const label = toolStatusLabel("web_fetch", {});
+    expect(label.running).toBe("Fetching URL");
+    expect(label.done).toBe("Fetched URL");
+  });
+
+  it("unknown tool name uses capitalized name as fallback", () => {
+    const label = toolStatusLabel("my_custom_tool", {});
+    expect(label.running).toBe("My_custom_tool");
+    expect(label.done).toBe("My_custom_tool done");
+  });
+
+  it("empty name falls back gracefully", () => {
+    const label = toolStatusLabel("", {});
+    expect(label.running).toBe("Tool");
+    expect(label.done).toBe("Tool done");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ToolStatusRenderer
+// ---------------------------------------------------------------------------
+
+describe("ToolStatusRenderer", () => {
+  it("is a no-op when stdout is not a TTY (start, finish, stop all safe)", () => {
+    // In CI / test runner stdout is not a TTY, so these should never throw.
+    const renderer = new ToolStatusRenderer();
+    expect(() => renderer.start("Doing something")).not.toThrow();
+    expect(() => renderer.finish("Done", true)).not.toThrow();
+    expect(() => renderer.finish("Failed", false)).not.toThrow();
+    expect(() => renderer.stop()).not.toThrow();
+  });
+
+  it("can be started and finished multiple times without error", () => {
+    const renderer = new ToolStatusRenderer();
+    for (let i = 0; i < 3; i++) {
+      renderer.start(`Step ${i}`);
+      renderer.finish(`Step ${i} done`, i % 2 === 0);
+    }
   });
 });

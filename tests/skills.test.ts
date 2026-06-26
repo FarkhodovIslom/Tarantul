@@ -14,7 +14,7 @@ import { BUILTIN_SKILLS_DIR } from "../src/skills/index.js";
 // ---------------------------------------------------------------------------
 
 function makeTmpDir(): string {
-  const dir = join(tmpdir(), `nanobot-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = join(tmpdir(), `tarantul-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -40,7 +40,7 @@ This skill does things for testing.
 const ALWAYS_SKILL = `---
 name: always-skill
 description: Always-loaded skill.
-metadata: {"nanobot":{"always":true}}
+metadata: {"tarantul":{"always":true}}
 ---
 
 # Always Skill
@@ -51,7 +51,7 @@ This is always in context.
 const REQUIRES_SKILL = `---
 name: requires-bins
 description: Skill that needs a fake binary.
-metadata: {"nanobot":{"requires":{"bins":["__nonexistent_bin_xyz__"]}}}
+metadata: {"tarantul":{"requires":{"bins":["__nonexistent_bin_xyz__"]}}}
 ---
 
 # Requires Bins
@@ -62,7 +62,7 @@ This skill needs a binary.
 const ENV_SKILL = `---
 name: requires-env
 description: Skill that needs an env var.
-metadata: {"nanobot":{"requires":{"env":["__NONEXISTENT_ENV_XYZ__"]}}}
+metadata: {"tarantul":{"requires":{"env":["__NONEXISTENT_ENV_XYZ__"]}}}
 ---
 
 # Requires Env
@@ -73,7 +73,7 @@ This skill needs an env var.
 const MULTI_FIELD_SKILL = `---
 name: github
 description: "Interact with GitHub using the \`gh\` CLI."
-metadata: {"nanobot":{"emoji":"🐙","requires":{"bins":["gh"]}}}
+metadata: {"tarantul":{"emoji":"🐙","requires":{"bins":["gh"]}}}
 ---
 
 # GitHub Skill
@@ -268,7 +268,7 @@ describe("SkillsLoader — getAlwaysSkills", () => {
   });
 
   it("does not include always skills with unmet requirements", () => {
-    const content = `---\nname: always-req\ndescription: Always but needs binary.\nmetadata: {"nanobot":{"always":true,"requires":{"bins":["__nonexistent__"]}}}\n---\n# content`;
+    const content = `---\nname: always-req\ndescription: Always but needs binary.\nmetadata: {"tarantul":{"always":true,"requires":{"bins":["__nonexistent__"]}}}\n---\n# content`;
     writeSkill(builtinDir, "always-req", content);
     const loader = new SkillsLoader(wsDir, builtinDir);
     expect(loader.getAlwaysSkills()).toEqual([]);

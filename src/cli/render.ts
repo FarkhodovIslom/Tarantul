@@ -13,6 +13,9 @@ export const ansi = {
   reset: `${ESC}0m`,
   bold: `${ESC}1m`,
   dim: `${ESC}2m`,
+  italic: `${ESC}3m`,
+  underline: `${ESC}4m`,
+  strike: `${ESC}9m`,
   cyan: `${ESC}36m`,
   yellow: `${ESC}33m`,
   green: `${ESC}32m`,
@@ -35,62 +38,111 @@ export function isColorSupported(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Streaming markdown renderer
-// Minimal subset: bold, code spans, headings, bullet lists.
+// Markdown → ANSI renderer
+// Block-aware (headings, lists, blockquotes, code fences, rules) with inline
+// emphasis. Stateful across lines so fenced code blocks survive line-by-line
+// streaming. Lightweight — no external parser.
 // ---------------------------------------------------------------------------
 
-const LOGO = "🐈";
-const BOT_NAME = "nanobot";
+const LOGO = "🕷️";
+const BOT_NAME = "tarantul";
+
+const FENCE_RE = /^\s*(```|~~~)/;
 
 /**
- * Lightweight Markdown → ANSI converter for terminal display.
- * Only the most common patterns; avoids pulling in a full parser.
+ * Stateful line-oriented Markdown renderer. Feed it one source line at a time
+ * (without the trailing newline) via {@link renderLine}; it tracks fenced code
+ * block state so the same instance can render a whole document or a stream.
+ */
+export class MarkdownRenderer {
+  private inFence = false;
+
+  /** Render a single source line to ANSI. Returns the line unchanged when color is off. */
+  renderLine(src: string): string {
+    if (!isColorSupported()) return src;
+
+    // Fenced code block delimiters toggle the fenced state either way.
+    if (FENCE_RE.test(src)) {
+      this.inFence = !this.inFence;
+      return styled(src, ansi.gray);
+    }
+    if (this.inFence) return styled(src, ansi.gray);
+
+    return renderBlockLine(src);
+  }
+}
+
+/**
+ * Lightweight Markdown → ANSI converter for a complete string.
+ * Convenience wrapper over {@link MarkdownRenderer} for non-streaming output.
  */
 export function markdownToAnsi(text: string): string {
   if (!isColorSupported()) return text;
+  const r = new MarkdownRenderer();
+  return text
+    .split("\n")
+    .map((line) => r.renderLine(line))
+    .join("\n");
+}
 
-  const lines = text.split("\n");
-  const out: string[] = [];
-
-  for (const line of lines) {
-    let l = line;
-
-    // Headings  ## Title
-    const heading = l.match(/^(#{1,3})\s+(.*)$/);
-    if (heading) {
-      out.push(styled(heading[2]!, ansi.bold, ansi.cyan));
-      continue;
-    }
-
-    // Bullet lists
-    const bullet = l.match(/^(\s*)([-*])\s+(.*)$/);
-    if (bullet) {
-      const processed = inlineMarkdown(bullet[3]!);
-      out.push(`${bullet[1]}• ${processed}`);
-      continue;
-    }
-
-    // Code block fence — pass through as-is (dimmed)
-    if (l.startsWith("```")) {
-      out.push(styled(l, ansi.dim));
-      continue;
-    }
-
-    out.push(inlineMarkdown(l));
+/** Render a single non-fenced line: headings, lists, quotes, rules, or inline. */
+function renderBlockLine(l: string): string {
+  // Headings  # .. ###### Title
+  const heading = l.match(/^(#{1,6})\s+(.*)$/);
+  if (heading) {
+    const codes =
+      heading[1]!.length === 1 ? [ansi.bold, ansi.cyan, ansi.underline] : [ansi.bold, ansi.cyan];
+    return styled(inlineMarkdown(heading[2]!), ...codes);
   }
 
-  return out.join("\n");
+  // Horizontal rule  --- / *** / ___
+  if (/^\s*([-*_])\1{2,}\s*$/.test(l)) {
+    const width = Math.min(40, process.stdout.columns || 40);
+    return styled("─".repeat(width), ansi.gray);
+  }
+
+  // Blockquote  > text
+  const quote = l.match(/^(\s*)>\s?(.*)$/);
+  if (quote) {
+    return `${quote[1]}${styled("│ ", ansi.gray)}${styled(inlineMarkdown(quote[2]!), ansi.gray)}`;
+  }
+
+  // Ordered list  1. text
+  const ordered = l.match(/^(\s*)(\d+)\.\s+(.*)$/);
+  if (ordered) {
+    return `${ordered[1]}${styled(`${ordered[2]}.`, ansi.cyan)} ${inlineMarkdown(ordered[3]!)}`;
+  }
+
+  // Bullet list  - / * / + text
+  const bullet = l.match(/^(\s*)[-*+]\s+(.*)$/);
+  if (bullet) {
+    return `${bullet[1]}${styled("•", ansi.cyan)} ${inlineMarkdown(bullet[2]!)}`;
+  }
+
+  return inlineMarkdown(l);
 }
 
 function inlineMarkdown(text: string): string {
   if (!isColorSupported()) return text;
-  return text
-    // **bold**
-    .replace(/\*\*(.+?)\*\*/g, (_, m: string) => styled(m, ansi.bold))
-    // `code`
-    .replace(/`([^`]+)`/g, (_, m: string) => styled(m, ansi.dim))
-    // *italic*
-    .replace(/\*(.+?)\*/g, (_, m: string) => styled(m, ansi.dim));
+  return (
+    text
+      // `code` — render first so its contents are left intact
+      .replace(/`([^`]+)`/g, (_, m: string) => styled(m, ansi.yellow))
+      // **bold** / __bold__
+      .replace(/\*\*(.+?)\*\*/g, (_, m: string) => styled(m, ansi.bold))
+      .replace(/__(.+?)__/g, (_, m: string) => styled(m, ansi.bold))
+      // ~~strikethrough~~
+      .replace(/~~(.+?)~~/g, (_, m: string) => styled(m, ansi.strike))
+      // *italic* / _italic_
+      .replace(/\*(.+?)\*/g, (_, m: string) => styled(m, ansi.italic))
+      .replace(/(?<![\w])_(.+?)_(?![\w])/g, (_, m: string) => styled(m, ansi.italic))
+      // [text](url) — last, so URL punctuation isn't reprocessed
+      .replace(
+        /\[([^\]]+)\]\(([^)]+)\)/g,
+        (_, label: string, url: string) =>
+          `${styled(label, ansi.blue, ansi.underline)}${styled(` (${url})`, ansi.dim)}`,
+      )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -164,29 +216,47 @@ export class Spinner {
 // ---------------------------------------------------------------------------
 
 export class StreamRenderer {
-  private buf = "";
+  /** Holds the in-progress (not yet newline-terminated) line in markdown mode. */
+  private pending = "";
   private started = false;
   private readonly spinner: Spinner;
+  private readonly md = new MarkdownRenderer();
+  /** True when we style output line-by-line; false falls back to raw passthrough. */
+  private readonly useMarkdown: boolean;
   streamed = false;
 
-  constructor(private readonly renderMarkdown: boolean) {
+  constructor(renderMarkdown: boolean) {
+    this.useMarkdown = renderMarkdown && isColorSupported();
     this.spinner = new Spinner();
     this.spinner.start();
   }
 
   async onDelta(delta: string): Promise<void> {
     this.streamed = true;
-    this.buf += delta;
+    this.pending += delta;
 
-    if (!this.started && this.buf.trim()) {
+    // Defer the header until the first non-blank content arrives.
+    if (!this.started) {
+      if (!this.pending.trim()) return;
       this.spinner.stop();
       process.stdout.write("\n" + styled(`${LOGO} ${BOT_NAME}`, ansi.cyan) + "\n");
       this.started = true;
     }
 
-    if (this.started) {
-      // Write incremental delta — note this is raw text during streaming
-      printDelta(delta);
+    if (!this.useMarkdown) {
+      // Raw passthrough — token-by-token, no styling.
+      process.stdout.write(this.pending);
+      this.pending = "";
+      return;
+    }
+
+    // Markdown mode: flush every complete line, holding the trailing partial.
+    let nl = this.pending.indexOf("\n");
+    while (nl !== -1) {
+      const line = this.pending.slice(0, nl);
+      process.stdout.write(this.md.renderLine(line) + "\n");
+      this.pending = this.pending.slice(nl + 1);
+      nl = this.pending.indexOf("\n");
     }
   }
 
@@ -194,26 +264,131 @@ export class StreamRenderer {
     this.spinner.stop();
 
     if (this.started) {
-      // Render final accumulated content with markdown if enabled
-      if (this.renderMarkdown && this.buf.trim()) {
-        // Move up and re-render the full content with ANSI styling
-        // For simplicity, just add newlines to close out the stream
-        process.stdout.write("\n");
+      // Flush any trailing partial line through the renderer.
+      if (this.useMarkdown && this.pending.length > 0) {
+        process.stdout.write(this.md.renderLine(this.pending) + "\n");
       } else {
         process.stdout.write("\n");
       }
+      this.pending = "";
     }
 
     if (opts.resuming) {
-      this.buf = "";
       this.started = false;
       this.spinner.start();
-    } else {
+    } else if (this.started) {
       process.stdout.write("\n");
     }
   }
 
   async close(): Promise<void> {
     this.spinner.stop();
+  }
+
+  /** Stop the underlying spinner without flushing pending content. */
+  stopSpinner(): void {
+    this.spinner.stop();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool-use status rendering
+// Maps a tool name + args to a human label, then renders an in-place
+// spinner→checkmark line per tool. No-ops outside a TTY.
+// ---------------------------------------------------------------------------
+
+/** Extract a file/dir basename from an arg value of unknown shape. */
+function pathBaseName(p: unknown): string {
+  if (typeof p !== "string" || p.length === 0) return "";
+  const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? p;
+}
+
+/** Truncate a shell command for inline display. */
+function truncateCmd(cmd: unknown, max = 48): string {
+  if (typeof cmd !== "string") return "";
+  const c = cmd.trim().replace(/\s+/g, " ");
+  return c.length > max ? `${c.slice(0, max - 1)}…` : c;
+}
+
+export interface ToolStatusLabel {
+  /** Label shown while the tool is running (with spinner). */
+  running: string;
+  /** Label shown when the tool finishes (with checkmark). */
+  done: string;
+}
+
+/**
+ * Map a tool name + its call args to a human-readable running/done label pair.
+ * Unknown tools fall back to a capitalized form of the name.
+ */
+export function toolStatusLabel(
+  name: string,
+  args: Record<string, unknown>,
+): ToolStatusLabel {
+  const path = pathBaseName(args["path"]);
+  const withPath = (verb: string, past: string): ToolStatusLabel => ({
+    running: path ? `${verb} ${path}` : verb,
+    done: path ? `${past}: ${path}` : past,
+  });
+  switch (name) {
+    case "write_file":
+      return withPath("Creating", "File created");
+    case "read_file":
+      return withPath("Reading", "Read");
+    case "edit_file":
+      return withPath("Editing", "Edited");
+    case "list_dir":
+      return withPath("Listing", "Listed");
+    case "exec": {
+      const c = truncateCmd(args["command"]);
+      return {
+        running: c ? `Running command: ${c}` : "Running command",
+        done: "Command finished",
+      };
+    }
+    case "cron":
+      return { running: "Scheduling task", done: "Task scheduled" };
+    case "web_search":
+      return { running: "Searching the web", done: "Web search done" };
+    case "web_fetch":
+      return { running: "Fetching URL", done: "Fetched URL" };
+    default: {
+      const cap = name ? name.charAt(0).toUpperCase() + name.slice(1) : "Tool";
+      return { running: cap, done: `${cap} done` };
+    }
+  }
+}
+
+/**
+ * Renders a single tool's lifecycle: an animated spinner labelled with the
+ * running action, replaced in place by a green ✓ / red ✗ and the done label.
+ * All methods are no-ops when stdout is not a TTY.
+ */
+export class ToolStatusRenderer {
+  private readonly spinner = new Spinner();
+  private active = false;
+
+  start(label: string): void {
+    if (!process.stdout.isTTY) return;
+    this.spinner.stop();
+    this.spinner.start(`${label}…`);
+    this.active = true;
+  }
+
+  finish(label: string, ok = true): void {
+    if (!process.stdout.isTTY) return;
+    this.spinner.stop();
+    this.active = false;
+    const mark = ok ? styled("✓", ansi.green) : styled("✗", ansi.red);
+    process.stdout.write(`${mark} ${styled(label, ansi.dim)}\n`);
+  }
+
+  /** Clear any active spinner without printing a result line. */
+  stop(): void {
+    if (this.active) {
+      this.spinner.stop();
+      this.active = false;
+    }
   }
 }

@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-# nanobot-ts — lightweight Bun-based Docker image
+# tarantul-ts — lightweight Bun-based Docker image
 # ──────────────────────────────────────────────────────────────
 # Stage 1: install dependencies (cached layer)
 # Stage 2: copy source + skills → slim runtime image
@@ -35,7 +35,7 @@ COPY src/ src/
 COPY skills/ skills/
 
 # Create config directory
-RUN mkdir -p /root/.nanobot
+RUN mkdir -p /root/.tarantul
 
 # API server default port
 EXPOSE 8080

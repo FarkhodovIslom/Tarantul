@@ -1,8 +1,3 @@
-/**
- * OpenAI-compatible provider for all non-Anthropic LLM APIs.
- * Mirrors nanobot/providers/openai_compat_provider.py
- */
-
 import OpenAI from "openai";
 import { createHash, randomBytes } from "node:crypto";
 import type { ChatOptions, ChatStreamOptions, LLMResponse, ToolCallRequest } from "./base.js";
@@ -13,8 +8,8 @@ const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const ALLOWED_MSG_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
 
 const DEFAULT_OPENROUTER_HEADERS: Record<string, string> = {
-  "HTTP-Referer": "https://github.com/HKUDS/nanobot",
-  "X-OpenRouter-Title": "nanobot",
+  "HTTP-Referer": "https://github.com/FarkhodovIslom/tarantul",
+  "X-OpenRouter-Title": "tarantul",
   "X-OpenRouter-Categories": "cli-agent,personal-agent",
 };
 

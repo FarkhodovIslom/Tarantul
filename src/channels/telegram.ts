@@ -1,6 +1,6 @@
 /**
  * Telegram channel implementation using grammY.
- * Mirrors nanobot/channels/telegram.py
+ * Mirrors tarantul/channels/telegram.py
  *
  * Transport: long polling (no webhook / public IP needed).
  * Streaming: progressive message editing at STREAM_EDIT_INTERVAL_MS cadence.
@@ -362,12 +362,12 @@ export class TelegramChannel extends BaseChannel {
 
   private async _onStart(ctx: Context): Promise<void> {
     const name = ctx.from?.first_name ?? "friend";
-    await ctx.reply(`👋 Hi ${name}! I'm nanobot.\nSend me a message and I'll respond!\n/help for commands.`);
+    await ctx.reply(`👋 Hi ${name}! I'm Tarantul.\nSend me a message and I'll respond!\n/help for commands.`);
   }
 
   private async _onHelp(ctx: Context): Promise<void> {
     await ctx.reply(
-      "🐈 nanobot commands:\n" +
+      "🕷️ tarantul commands:\n" +
       "/new — New conversation\n" +
       "/stop — Stop current task\n" +
       "/restart — Restart the bot\n" +

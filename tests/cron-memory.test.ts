@@ -19,7 +19,7 @@ import { MemoryStore } from "../src/agent/memory.js";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "nanobot-cron-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "tarantul-cron-test-"));
 });
 
 afterEach(() => {

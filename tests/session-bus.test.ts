@@ -19,7 +19,7 @@ import { findLegalMessageStart, safeFilename, truncateText } from "../src/utils/
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "nanobot-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "tarantul-test-"));
 });
 
 afterEach(() => {

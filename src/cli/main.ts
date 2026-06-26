@@ -12,7 +12,10 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { styled, ansi, printResponse, printProgress, StreamRenderer } from "./render.js";
+import {
+  styled, ansi, printResponse, printProgress,
+  StreamRenderer, ToolStatusRenderer, toolStatusLabel,
+} from "./render.js";
 import { Repl, readStdin } from "./repl.js";
 import { loadConfig, setConfigPath } from "../config/loader.js";
 import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
@@ -28,8 +31,60 @@ import { CommandRouter, registerBuiltinCommands, buildHelpText } from "../comman
 import { MemoryStore } from "../agent/memory.js";
 import { SkillsLoader, BUILTIN_SKILLS_DIR } from "../skills/index.js";
 
+import { AgentHook } from "../agent/hook.js";
+import type { AgentHookContext, ToolEvent } from "../agent/hook.js";
+import type { ToolCallRequest } from "../providers/base.js";
+
 const VERSION = "0.1.0";
-const LOGO = "🐈";
+const LOGO = "🕷️";
+
+// ---------------------------------------------------------------------------
+// ReplHook — REPL-only streaming + tool-status rendering
+// ---------------------------------------------------------------------------
+
+/**
+ * A named hook for the interactive REPL that:
+ * - streams model output token-by-token via StreamRenderer
+ * - renders per-tool spinners + checkmarks via ToolStatusRenderer
+ *
+ * Non-streaming paths (one-shot / piped) never attach this hook, so the
+ * new methods stay as no-ops outside the REPL.
+ */
+class ReplHook extends AgentHook {
+  private readonly streamRenderer: StreamRenderer;
+  private readonly toolStatus = new ToolStatusRenderer();
+
+  constructor(renderMarkdown: boolean) {
+    super();
+    this.streamRenderer = new StreamRenderer(renderMarkdown);
+  }
+
+  override wantsStreaming(): boolean { return true; }
+
+  override async onStream(_ctx: AgentHookContext, delta: string): Promise<void> {
+    await this.streamRenderer.onDelta(delta);
+  }
+
+  override async onStreamEnd(_ctx: AgentHookContext, opts: { resuming: boolean }): Promise<void> {
+    await this.streamRenderer.onEnd(opts);
+  }
+
+  override async onToolStart(_ctx: AgentHookContext, tc: ToolCallRequest): Promise<void> {
+    // Stop the stream spinner so it doesn't overwrite the tool-status line.
+    this.streamRenderer.stopSpinner();
+    const label = toolStatusLabel(tc.name, tc.arguments);
+    this.toolStatus.start(label.running);
+  }
+
+  override async onToolEnd(_ctx: AgentHookContext, tc: ToolCallRequest, event: ToolEvent): Promise<void> {
+    const label = toolStatusLabel(tc.name, tc.arguments);
+    this.toolStatus.finish(label.done, event.status === "ok");
+  }
+
+  async close(): Promise<void> {
+    await this.streamRenderer.close();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Arg parser — minimal, no deps
@@ -114,7 +169,7 @@ function loadRuntimeConfig(configPath?: string, workspace?: string) {
 // ---------------------------------------------------------------------------
 
 function cmdVersion(): void {
-  console.log(`${LOGO} nanobot v${VERSION}`);
+  console.log(`${LOGO} tarantul v${VERSION}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,11 +206,11 @@ async function cmdOnboard(args: ParsedArgs): Promise<void> {
     console.log(styled(`✓ Created workspace at ${wsPath}`, ansi.green));
   }
 
-  console.log(`\n${LOGO} nanobot is ready!`);
+  console.log(`\n${LOGO} tarantul is ready!`);
   console.log("\nNext steps:");
   console.log(`  1. Add your API key to ${styled(cfgPath, ansi.cyan)}`);
   console.log("     Get one at: https://openrouter.ai/keys");
-  console.log(`  2. Chat: ${styled("nanobot agent", ansi.cyan)}`);
+  console.log(`  2. Chat: ${styled("tarantul agent", ansi.cyan)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +288,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   const bus = new MessageBus();
   const channelManager = await ChannelManager.create(cfg, bus);
 
-  console.log(`${LOGO} nanobot`);
+  console.log(`${LOGO} tarantul`);
   console.log(`  API      : ${styled(`${server.url}/v1/chat/completions`, ansi.cyan)}`);
   console.log(`  Model    : ${styled(modelName, ansi.cyan)}`);
   const chNames = channelManager.enabledChannels;
@@ -335,7 +390,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       chatId: "direct",
     });
 
-    let streamRenderer: StreamRenderer | null = null;
+    let replHook: ReplHook | null = null;
 
     const result = await runner.run({
       initialMessages: messages,
@@ -352,23 +407,14 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       ...(streaming
         ? {
             hook: (() => {
-              const { AgentHook } = require("../agent/hook.js") as typeof import("../agent/hook.js");
-              streamRenderer = new StreamRenderer(renderMarkdown);
-              return new class extends AgentHook {
-                override wantsStreaming() { return true; }
-                override async onStream(_ctx: unknown, delta: string) {
-                  await streamRenderer!.onDelta(delta);
-                }
-                override async onStreamEnd(_ctx: unknown, opts: { resuming: boolean }) {
-                  await streamRenderer!.onEnd(opts);
-                }
-              }();
+              replHook = new ReplHook(renderMarkdown);
+              return replHook;
             })(),
           }
         : {}),
     });
 
-    if (streamRenderer) await (streamRenderer as StreamRenderer).close();
+    if (replHook) await (replHook as ReplHook).close();
 
     // Persist new messages to session
     const newMsgs = result.messages.slice(1 + history.length); // skip system + history
@@ -415,7 +461,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   repl.start();
 
   console.log(
-    `${LOGO} ${styled("nanobot", ansi.cyan)} v${VERSION} — ` +
+    `${LOGO} ${styled("tarantul", ansi.cyan)} v${VERSION} — ` +
       `model: ${styled(cfg.agents.defaults.model, ansi.cyan)}`,
   );
   console.log(styled('Type "/help" for commands, "exit" to quit.', ansi.dim));
@@ -496,9 +542,9 @@ async function main(): Promise<void> {
   const rest = argv.slice(1);
 
   if (!subcmd || subcmd === "--help" || subcmd === "-h") {
-    console.log(`${LOGO} nanobot v${VERSION} — Personal AI Assistant`);
+    console.log(`${LOGO} tarantul v${VERSION} — Personal AI Assistant`);
     console.log();
-    console.log("Usage: nanobot <command> [options]");
+    console.log("Usage: tarantul <command> [options]");
     console.log();
     console.log("Commands:");
     console.log("  agent    Interactive chat with the agent");
@@ -506,7 +552,7 @@ async function main(): Promise<void> {
     console.log("  serve    Start OpenAI-compatible API server");
     console.log("  version  Print version");
     console.log();
-    console.log("Run 'nanobot <command> --help' for command options.");
+    console.log("Run 'tarantul <command> --help' for command options.");
     return;
   }
 
@@ -521,7 +567,7 @@ async function main(): Promise<void> {
     // Per-command help
     switch (subcmd) {
       case "agent":
-        console.log("Usage: nanobot agent [options]");
+        console.log("Usage: tarantul agent [options]");
         console.log("  -m, --message <text>    One-shot message (non-interactive)");
         console.log("  -s, --session <key>     Session key (default: cli:direct)");
         console.log("  -w, --workspace <path>  Workspace directory");
@@ -530,12 +576,12 @@ async function main(): Promise<void> {
         console.log("  --logs                  Show runtime logs");
         break;
       case "onboard":
-        console.log("Usage: nanobot onboard [options]");
+        console.log("Usage: tarantul onboard [options]");
         console.log("  -w, --workspace <path>  Workspace directory");
         console.log("  -c, --config <path>     Config file path");
         break;
       case "serve":
-        console.log("Usage: nanobot serve [options]");
+        console.log("Usage: tarantul serve [options]");
         console.log("  -p, --port <port>       Port (default: 8080)");
         console.log("  -H, --host <host>       Bind address (default: 127.0.0.1)");
         console.log("  -c, --config <path>     Config file path");
@@ -556,7 +602,7 @@ async function main(): Promise<void> {
       break;
     default:
       console.error(styled(`Unknown command: ${subcmd}`, ansi.red));
-      console.error("Run 'nanobot --help' for usage.");
+      console.error("Run 'tarantul --help' for usage.");
       process.exit(1);
   }
 }

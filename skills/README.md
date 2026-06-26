@@ -1,6 +1,6 @@
-# nanobot Skills
+# Tarantul Skills
 
-This directory contains built-in skills that extend nanobot's capabilities.
+This directory contains built-in skills that extend Tarantul's capabilities.
 
 ## Skill Format
 

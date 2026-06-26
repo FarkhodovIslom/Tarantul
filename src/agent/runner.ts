@@ -13,7 +13,7 @@
 
 import { MessageBuffer } from "./message-buffer.js";
 import { AgentHook } from "./hook.js";
-import type { AgentHookContext } from "./hook.js";
+import type { AgentHookContext, ToolEvent } from "./hook.js";
 import { materializeContent } from "./context.js";
 import type { Tool } from "./tools/base.js";
 import type { ToolRegistry } from "./tools/registry.js";
@@ -176,6 +176,8 @@ export class AgentRunner {
           spec,
           response.toolCalls,
           externalLookupCounts,
+          hook,
+          ctx,
         );
         toolEvents.push(...events);
         ctx.toolResults = results;
@@ -372,30 +374,31 @@ export class AgentRunner {
     spec: AgentRunSpec,
     toolCalls: ToolCallRequest[],
     externalLookupCounts: Map<string, number>,
+    hook: AgentHook,
+    ctx: AgentHookContext,
   ): Promise<{
     results: unknown[];
     events: Record<string, string>[];
     fatalError: unknown | null;
   }> {
     const batches = partitionToolBatches(spec, toolCalls);
-    const rawResults: Array<{ result: unknown; event: Record<string, string>; error: unknown }> =
-      [];
+    const rawResults: Array<{ result: unknown; event: ToolEvent; error: unknown }> = [];
 
     for (const batch of batches) {
       if (spec.concurrentTools && batch.length > 1) {
         const settled = await Promise.all(
-          batch.map((tc) => this._runTool(spec, tc, externalLookupCounts)),
+          batch.map((tc) => this._runTool(spec, tc, externalLookupCounts, hook, ctx)),
         );
         rawResults.push(...settled);
       } else {
         for (const tc of batch) {
-          rawResults.push(await this._runTool(spec, tc, externalLookupCounts));
+          rawResults.push(await this._runTool(spec, tc, externalLookupCounts, hook, ctx));
         }
       }
     }
 
     const results: unknown[] = [];
-    const events: Record<string, string>[] = [];
+    const events: ToolEvent[] = [];
     let fatalError: unknown | null = null;
 
     for (const { result, event, error } of rawResults) {
@@ -404,20 +407,33 @@ export class AgentRunner {
       if (error !== null && fatalError === null) fatalError = error;
     }
 
-    return { results, events, fatalError };
+    return { results, events: events as unknown as Record<string, string>[], fatalError };
   }
 
   private async _runTool(
     spec: AgentRunSpec,
     tc: ToolCallRequest,
     externalLookupCounts: Map<string, number>,
-  ): Promise<{ result: unknown; event: Record<string, string>; error: unknown }> {
+    hook: AgentHook,
+    ctx: AgentHookContext,
+  ): Promise<{ result: unknown; event: ToolEvent; error: unknown }> {
+    await hook.onToolStart(ctx, tc);
+    const out = await this._runToolInner(spec, tc, externalLookupCounts);
+    await hook.onToolEnd(ctx, tc, out.event);
+    return out;
+  }
+
+  private async _runToolInner(
+    spec: AgentRunSpec,
+    tc: ToolCallRequest,
+    externalLookupCounts: Map<string, number>,
+  ): Promise<{ result: unknown; event: ToolEvent; error: unknown }> {
     const HINT = "\n\n[Analyze the error above and try a different approach.]";
 
     // Check repeated external lookup throttle
     const lookupError = repeatedExternalLookupError(tc.name, tc.arguments, externalLookupCounts);
     if (lookupError) {
-      const event: Record<string, string> = {
+      const event: ToolEvent = {
         name: tc.name,
         status: "error",
         detail: "repeated external lookup blocked",
@@ -447,7 +463,7 @@ export class AgentRunner {
     }
 
     if (prepError) {
-      const event: Record<string, string> = {
+      const event: ToolEvent = {
         name: tc.name,
         status: "error",
         detail: prepError.split(": ").slice(-1)[0]!.substring(0, 120),
@@ -469,7 +485,7 @@ export class AgentRunner {
       }
     } catch (err) {
       const msg = `Error: ${(err as Error).constructor?.name ?? "Error"}: ${err}`;
-      const event: Record<string, string> = {
+      const event: ToolEvent = {
         name: tc.name,
         status: "error",
         detail: String(err).replace(/\n/g, " ").trim().substring(0, 120),
@@ -483,7 +499,7 @@ export class AgentRunner {
 
     // Check for error-prefixed string results
     if (typeof rawResult === "string" && rawResult.startsWith("Error")) {
-      const event: Record<string, string> = {
+      const event: ToolEvent = {
         name: tc.name,
         status: "error",
         detail: rawResult.replace(/\n/g, " ").trim().substring(0, 120),
@@ -496,7 +512,7 @@ export class AgentRunner {
     }
 
     const detail = rawResult == null ? "(empty)" : String(rawResult).replace(/\n/g, " ").trim();
-    const event: Record<string, string> = {
+    const event: ToolEvent = {
       name: tc.name,
       status: "ok",
       detail: detail.length > 120 ? detail.substring(0, 120) + "..." : detail,

@@ -12,6 +12,19 @@ import type { LLMResponse, ToolCallRequest } from "../providers/base.js";
 import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
+// Tool event — snapshot emitted by the runner around each tool execution
+// ---------------------------------------------------------------------------
+
+export interface ToolEvent {
+  /** Tool name (e.g. "write_file"). */
+  readonly name: string;
+  /** "ok" on success, "error" on failure. */
+  readonly status: string;
+  /** Short human-readable detail (result excerpt or error message). */
+  readonly detail: string;
+}
+
+// ---------------------------------------------------------------------------
 // Hook context — snapshot for one iteration, no live references to history
 // ---------------------------------------------------------------------------
 
@@ -45,6 +58,10 @@ export class AgentHook {
   async onStreamEnd(_ctx: AgentHookContext, _opts: { resuming: boolean }): Promise<void> {}
 
   async beforeExecuteTools(_ctx: AgentHookContext): Promise<void> {}
+
+  async onToolStart(_ctx: AgentHookContext, _tc: ToolCallRequest): Promise<void> {}
+
+  async onToolEnd(_ctx: AgentHookContext, _tc: ToolCallRequest, _event: ToolEvent): Promise<void> {}
 
   async afterIteration(_ctx: AgentHookContext): Promise<void> {}
 
@@ -97,6 +114,22 @@ export class CompositeHook extends AgentHook {
     for (const h of this.hooks) {
       try { await h.beforeExecuteTools(ctx); } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.beforeExecuteTools error");
+      }
+    }
+  }
+
+  override async onToolStart(ctx: AgentHookContext, tc: ToolCallRequest): Promise<void> {
+    for (const h of this.hooks) {
+      try { await h.onToolStart(ctx, tc); } catch (e) {
+        logger.error({ err: e, hook: h.constructor.name }, "AgentHook.onToolStart error");
+      }
+    }
+  }
+
+  override async onToolEnd(ctx: AgentHookContext, tc: ToolCallRequest, event: ToolEvent): Promise<void> {
+    for (const h of this.hooks) {
+      try { await h.onToolEnd(ctx, tc, event); } catch (e) {
+        logger.error({ err: e, hook: h.constructor.name }, "AgentHook.onToolEnd error");
       }
     }
   }

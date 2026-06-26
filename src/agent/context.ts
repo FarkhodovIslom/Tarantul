@@ -296,9 +296,9 @@ function buildIdentity(workspace: string): string {
       ? `## Platform Policy (Windows)\n- Do not assume GNU tools like \`grep\`, \`sed\`, or \`awk\` exist.\n- Prefer Windows-native commands or file tools when they are more reliable.\n`
       : `## Platform Policy (POSIX)\n- Prefer UTF-8 and standard shell tools.\n- Use file tools when they are simpler or more reliable than shell commands.\n`;
 
-  return `# nanobot 🐈
+  return `# tarantul 🕷️
 
-You are nanobot, a helpful AI assistant.
+You are Tarantul, a helpful AI assistant.
 
 ## Runtime
 ${runtime}
@@ -311,7 +311,7 @@ Your workspace is at: ${workspace}
 
 ${platformPolicy}
 
-## nanobot Guidelines
+## tarantul Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.
 - After writing or editing a file, re-read it if accuracy matters.

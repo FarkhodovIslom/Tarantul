@@ -1,6 +1,6 @@
 /**
  * OpenAI-compatible API request/response types.
- * Only the subset nanobot actually uses — keeps the type surface small.
+ * Only the subset tarantul actually uses — keeps the type surface small.
  */
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ export interface ChatCompletionRequest {
   model?: string;
   messages: ChatMessage[];
   stream?: boolean;
-  /** nanobot extension: route request to a named session */
+  /** tarantul extension: route request to a named session */
   session_id?: string;
   temperature?: number;
   max_tokens?: number;

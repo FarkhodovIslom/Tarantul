@@ -3,14 +3,14 @@ x-common: &common
     context: .
     dockerfile: Dockerfile
   volumes:
-    - ~/.nanobot:/root/.nanobot
+    - ~/.tarantul:/root/.tarantul
   env_file:
     - .env
 
 services:
   # ── API server + chat channels ──────────────────────────────
-  nanobot-serve:
-    container_name: nanobot-serve
+  tarantul-serve:
+    container_name: tarantul-serve
     <<: *common
     command: ["serve", "--host", "0.0.0.0"]
     restart: unless-stopped
@@ -26,7 +26,7 @@ services:
           memory: 256M
 
   # ── Interactive CLI (on-demand) ─────────────────────────────
-  nanobot-cli:
+  tarantul-cli:
     <<: *common
     profiles:
       - cli

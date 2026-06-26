@@ -1,5 +1,5 @@
 /**
- * OpenAI-compatible HTTP API server for nanobot.
+ * OpenAI-compatible HTTP API server for tarantul.
  *
  * Endpoints:
  *   POST /v1/chat/completions — single-turn chat (session-isolated)
@@ -240,7 +240,7 @@ async function handleModels(opts: ApiServerOpts): Promise<Response> {
         id: opts.modelName,
         object: "model",
         created: 0,
-        owned_by: "nanobot",
+        owned_by: "tarantul",
       },
     ],
   };

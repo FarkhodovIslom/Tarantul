@@ -1,8 +1,9 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "nanobot-ai",
+      "name": "tarantool",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.36.0",
         "@modelcontextprotocol/sdk": "^1.10.0",

@@ -10,7 +10,7 @@ import { TokenTracker, estimateMessageTokens, invalidateTokenCache } from "../sr
 import { MessageBuffer } from "../src/agent/message-buffer.js";
 import { AgentRunner } from "../src/agent/runner.js";
 import { AgentHook, CompositeHook } from "../src/agent/hook.js";
-import type { AgentHookContext } from "../src/agent/hook.js";
+import type { AgentHookContext, ToolEvent } from "../src/agent/hook.js";
 import { ToolRegistry } from "../src/agent/tools/registry.js";
 import type { LLMProvider, ChatOptions, LLMResponse } from "../src/providers/base.js";
 import { SystemPromptCache, buildMessages } from "../src/agent/context.js";
@@ -388,6 +388,138 @@ describe("AgentRunner", () => {
 });
 
 // ---------------------------------------------------------------------------
+// AgentRunner — onToolStart / onToolEnd hook integration
+// ---------------------------------------------------------------------------
+
+describe("AgentRunner — onToolStart/onToolEnd hooks", () => {
+  it("fires onToolStart once per tool call with correct name", async () => {
+    const { Tool } = await import("../src/agent/tools/base.js");
+    class PingTool extends Tool {
+      readonly name = "ping";
+      readonly description = "Ping";
+      readonly parameters = { type: "object", properties: {} };
+      async execute() { return "pong"; }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new PingTool());
+
+    const provider = new MockProvider([
+      {
+        content: null,
+        toolCalls: [
+          { id: "t1", name: "ping", arguments: {} },
+          { id: "t2", name: "ping", arguments: {} },
+        ],
+        finishReason: "tool_calls",
+        usage: {},
+      },
+      { content: "done", toolCalls: [], finishReason: "stop", usage: {} },
+    ]);
+
+    const startedNames: string[] = [];
+    class TrackHook extends AgentHook {
+      override async onToolStart(_ctx: AgentHookContext, tc: { name: string }) {
+        startedNames.push(tc.name);
+      }
+    }
+
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    await runner.run({
+      initialMessages: [{ role: "user", content: "go" }],
+      tools: registry,
+      model: "mock-model",
+      maxIterations: 5,
+      maxToolResultChars: 4000,
+      hook: new TrackHook(),
+    });
+
+    expect(startedNames).toEqual(["ping", "ping"]);
+  });
+
+  it("fires onToolEnd with status=ok on successful tool", async () => {
+    const { Tool } = await import("../src/agent/tools/base.js");
+    class OkTool extends Tool {
+      readonly name = "ok_tool";
+      readonly description = "Always ok";
+      readonly parameters = { type: "object", properties: {} };
+      async execute() { return "success result"; }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new OkTool());
+
+    const provider = new MockProvider([
+      {
+        content: null,
+        toolCalls: [{ id: "t1", name: "ok_tool", arguments: {} }],
+        finishReason: "tool_calls",
+        usage: {},
+      },
+      { content: "done", toolCalls: [], finishReason: "stop", usage: {} },
+    ]);
+
+    const endStatuses: string[] = [];
+    class EndHook extends AgentHook {
+      override async onToolEnd(_ctx: AgentHookContext, _tc: { name: string }, event: ToolEvent) {
+        endStatuses.push(event.status);
+      }
+    }
+
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    await runner.run({
+      initialMessages: [{ role: "user", content: "go" }],
+      tools: registry,
+      model: "mock-model",
+      maxIterations: 5,
+      maxToolResultChars: 4000,
+      hook: new EndHook(),
+    });
+
+    expect(endStatuses).toEqual(["ok"]);
+  });
+
+  it("fires onToolEnd with status=error when tool throws", async () => {
+    const { Tool } = await import("../src/agent/tools/base.js");
+    class BoomTool extends Tool {
+      readonly name = "boom";
+      readonly description = "Always explodes";
+      readonly parameters = { type: "object", properties: {} };
+      async execute(): Promise<string> { throw new Error("kaboom"); }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new BoomTool());
+
+    const provider = new MockProvider([
+      {
+        content: null,
+        toolCalls: [{ id: "t1", name: "boom", arguments: {} }],
+        finishReason: "tool_calls",
+        usage: {},
+      },
+      { content: "done", toolCalls: [], finishReason: "stop", usage: {} },
+    ]);
+
+    const endStatuses: string[] = [];
+    class EndHook extends AgentHook {
+      override async onToolEnd(_ctx: AgentHookContext, _tc: { name: string }, event: ToolEvent) {
+        endStatuses.push(event.status);
+      }
+    }
+
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    await runner.run({
+      initialMessages: [{ role: "user", content: "go" }],
+      tools: registry,
+      model: "mock-model",
+      maxIterations: 5,
+      maxToolResultChars: 4000,
+      hook: new EndHook(),
+    });
+
+    expect(endStatuses).toEqual(["error"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MessageBuffer — snipToFit + findLegalStart
 // ---------------------------------------------------------------------------
 
@@ -520,6 +652,57 @@ describe("CompositeHook", () => {
     expect(count).toBe(2);
   });
 
+  it("onToolStart fans out to all hooks", async () => {
+    const names: string[] = [];
+    class StartHook extends AgentHook {
+      constructor(private id: string) { super(); }
+      override async onToolStart(_ctx: AgentHookContext, tc: { name: string; id: string; arguments: Record<string, unknown> }) {
+        names.push(`${this.id}:${tc.name}`);
+      }
+    }
+    const composite = new CompositeHook([new StartHook("a"), new StartHook("b")]);
+    await composite.onToolStart(makeCtx(), { id: "tc1", name: "write_file", arguments: {} });
+    expect(names).toEqual(["a:write_file", "b:write_file"]);
+  });
+
+  it("onToolEnd fans out to all hooks", async () => {
+    const statuses: string[] = [];
+    class EndHook extends AgentHook {
+      override async onToolEnd(_ctx: AgentHookContext, _tc: { name: string; id: string; arguments: Record<string, unknown> }, event: ToolEvent) {
+        statuses.push(event.status);
+      }
+    }
+    const composite = new CompositeHook([new EndHook(), new EndHook()]);
+    await composite.onToolEnd(makeCtx(), { id: "tc1", name: "read_file", arguments: {} }, { name: "read_file", status: "ok", detail: "done" });
+    expect(statuses).toEqual(["ok", "ok"]);
+  });
+
+  it("onToolStart isolates errors from one hook so others still run", async () => {
+    const called: string[] = [];
+    class BadStart extends AgentHook {
+      override async onToolStart(): Promise<void> { throw new Error("boom"); }
+    }
+    class GoodStart extends AgentHook {
+      override async onToolStart(): Promise<void> { called.push("good"); }
+    }
+    const composite = new CompositeHook([new BadStart(), new GoodStart()]);
+    await composite.onToolStart(makeCtx(), { id: "tc1", name: "nop", arguments: {} });
+    expect(called).toContain("good");
+  });
+
+  it("onToolEnd isolates errors from one hook so others still run", async () => {
+    const called: string[] = [];
+    class BadEnd extends AgentHook {
+      override async onToolEnd(): Promise<void> { throw new Error("boom"); }
+    }
+    class GoodEnd extends AgentHook {
+      override async onToolEnd(): Promise<void> { called.push("good"); }
+    }
+    const composite = new CompositeHook([new BadEnd(), new GoodEnd()]);
+    await composite.onToolEnd(makeCtx(), { id: "tc1", name: "nop", arguments: {} }, { name: "nop", status: "ok", detail: "" });
+    expect(called).toContain("good");
+  });
+
   it("isolates errors from one hook so others still run", async () => {
     const calls: string[] = [];
     class BadHook extends AgentHook {
@@ -562,7 +745,7 @@ describe("SystemPromptCache", () => {
   let wsDir: string;
 
   beforeEach(() => {
-    wsDir = join(tmpdir(), `nanobot-ctx-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    wsDir = join(tmpdir(), `tarantul-ctx-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(wsDir, { recursive: true });
   });
 

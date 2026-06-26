@@ -1,4 +1,4 @@
-# nanobot
+# Tarantul 🕷️
 
 A lightweight personal AI assistant framework built with TypeScript and [Bun](https://bun.sh).
 
@@ -16,8 +16,8 @@ Supports 25+ LLM providers, tool execution, multi-channel chat (Telegram, Slack,
 ### Install
 
 ```bash
-git clone https://github.com/FarkhodovIslom/Nanobot.git
-cd Nanobot
+git clone https://github.com/FarkhodovIslom/Tarantul.git
+cd Tarantul
 bun install
 ```
 
@@ -27,7 +27,7 @@ bun install
 bun run start onboard
 ```
 
-This creates a default config at `~/.nanobot/config.yaml` and a workspace at `~/.nanobot/workspace/`. Add your provider API key:
+This creates a default config at `~/.tarantul/config.yaml` and a workspace at `~/.tarantul/workspace/`. Add your provider API key:
 
 ```yaml
 providers:
@@ -109,7 +109,7 @@ skills/
   skill-creator/SKILL.md # Create new skills
 ```
 
-Skills are auto-discovered from both workspace (`~/.nanobot/workspace/skills/`) and builtin directories. Workspace skills take priority. Skills can declare binary and environment requirements that are checked at load time.
+Skills are auto-discovered from both workspace (`~/.tarantul/workspace/skills/`) and builtin directories. Workspace skills take priority. Skills can declare binary and environment requirements that are checked at load time.
 
 ### OpenAI-Compatible API
 
@@ -230,7 +230,7 @@ bun run format
 
 ## Configuration
 
-Config file: `~/.nanobot/config.yaml`
+Config file: `~/.tarantul/config.yaml`
 
 ```yaml
 providers:
@@ -256,7 +256,7 @@ api:
   port: 8080
   api_key: my-secret-key
 
-workspace: ~/.nanobot/workspace
+workspace: ~/.tarantul/workspace
 ```
 
 All config keys accept both `camelCase` and `snake_case`.

@@ -1,6 +1,6 @@
 /**
  * Runtime path helpers derived from the active config context.
- * Mirrors nanobot/config/paths.py
+ * Mirrors tarantul/config/paths.py
  */
 
 import { mkdirSync } from "node:fs";
@@ -35,7 +35,7 @@ export function getLogsDir(): string {
 }
 
 export function getWorkspacePath(workspace?: string): string {
-  const raw = workspace ?? join(homedir(), ".nanobot", "workspace");
+  const raw = workspace ?? join(homedir(), ".tarantul", "workspace");
   const resolved = raw.startsWith("~/") ? raw.replace("~", homedir()) : raw;
   return ensureDir(resolved);
 }
@@ -43,19 +43,19 @@ export function getWorkspacePath(workspace?: string): string {
 export function isDefaultWorkspace(workspace?: string | null): boolean {
   const current = workspace
     ? (workspace.startsWith("~/") ? workspace.replace("~", homedir()) : workspace)
-    : join(homedir(), ".nanobot", "workspace");
-  const defaultPath = join(homedir(), ".nanobot", "workspace");
+    : join(homedir(), ".tarantul", "workspace");
+  const defaultPath = join(homedir(), ".tarantul", "workspace");
   return current === defaultPath;
 }
 
 export function getCliHistoryPath(): string {
-  return join(homedir(), ".nanobot", "history", "cli_history");
+  return join(homedir(), ".tarantul", "history", "cli_history");
 }
 
 export function getBridgeInstallDir(): string {
-  return join(homedir(), ".nanobot", "bridge");
+  return join(homedir(), ".tarantul", "bridge");
 }
 
 export function getLegacySessionsDir(): string {
-  return join(homedir(), ".nanobot", "sessions");
+  return join(homedir(), ".tarantul", "sessions");
 }

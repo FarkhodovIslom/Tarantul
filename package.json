@@ -1,15 +1,15 @@
 {
-  "name": "nanobot-ai",
+  "name": "tarantul",
   "version": "0.1.4",
   "description": "A lightweight personal AI assistant framework",
   "type": "module",
   "license": "MIT",
   "keywords": ["ai", "agent", "chatbot"],
   "bin": {
-    "nanobot": "./src/cli/index.ts"
+    "tarantul": "./src/cli/main.ts"
   },
   "scripts": {
-    "start": "bun run src/cli/index.ts",
+    "start": "bun run src/cli/main.ts",
     "gateway": "bun run src/gateway.ts",
     "api": "bun run src/api/server.ts",
     "test": "bun test",
@@ -17,10 +17,10 @@
     "lint": "biome check src tests",
     "format": "biome format --write src tests",
     "typecheck": "tsc --noEmit",
-    "docker:build": "docker build -t nanobot .",
-    "docker:serve": "docker compose up -d nanobot-serve",
+    "docker:build": "docker build -t tarantul .",
+    "docker:serve": "docker compose up -d tarantul-serve",
     "docker:stop": "docker compose down",
-    "docker:cli": "docker compose run --rm nanobot-cli"
+    "docker:cli": "docker compose run --rm tarantul-cli"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.0",

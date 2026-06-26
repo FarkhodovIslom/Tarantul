@@ -66,7 +66,7 @@ function makeErrorRunner(): AgentRunner {
 function makeRunSpec(): Omit<AgentRunSpec, "initialMessages"> {
   return {
     tools: new ToolRegistry(),
-    model: "nanobot",
+    model: "tarantul",
     maxIterations: 10,
     maxToolResultChars: 4000,
   };
@@ -84,11 +84,11 @@ const DEFAULT_OPTS: ApiServerOpts = {
   host: "127.0.0.1",
   port: 0, // OS assigns a free port
   timeoutSecs: 10,
-  modelName: "nanobot",
+  modelName: "tarantul",
 };
 
 beforeAll(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "nanobot-api-test-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "tarantul-api-test-"));
 });
 
 afterAll(() => {
@@ -142,7 +142,7 @@ describe("GET /v1/models", () => {
     const body = await res.json() as { object: string; data: { id: string }[] };
     expect(body.object).toBe("list");
     expect(body.data.length).toBe(1);
-    expect(body.data[0]!.id).toBe("nanobot");
+    expect(body.data[0]!.id).toBe("tarantul");
   });
 });
 
@@ -159,7 +159,7 @@ describe("POST /v1/chat/completions", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "nanobot",
+        model: "tarantul",
         messages: [{ role: "user", content: "Why is the sky blue?" }],
       }),
     });
@@ -170,7 +170,7 @@ describe("POST /v1/chat/completions", () => {
       choices: { message: { role: string; content: string } }[];
     };
     expect(body.object).toBe("chat.completion");
-    expect(body.model).toBe("nanobot");
+    expect(body.model).toBe("tarantul");
     expect(body.choices[0]?.message.role).toBe("assistant");
     expect(body.choices[0]?.message.content).toBe("The sky is blue.");
   });

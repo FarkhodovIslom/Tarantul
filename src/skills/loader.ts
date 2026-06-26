@@ -1,11 +1,11 @@
 /**
  * Skills loader — discovers, loads, and formats skills for context injection.
- * Mirrors nanobot/agent/skills.py
+ * Mirrors tarantul/agent/skills.py
  *
  * Skills are subdirectories containing a SKILL.md file with YAML frontmatter:
  *   name        — hyphen-case identifier
  *   description — what the skill does (used in summary)
- *   metadata    — JSON blob with nanobot key (requires, always, emoji, install)
+ *   metadata    — JSON blob with tarantul key (requires, always, emoji, install)
  *   always      — top-level boolean shorthand for always-load
  *
  * Two discovery paths (workspace takes priority over builtin):
@@ -33,7 +33,7 @@ export interface SkillInfo {
   source: "workspace" | "builtin";
 }
 
-export interface NanobotSkillMeta {
+export interface TarantulSkillMeta {
   emoji?: string;
   requires?: { bins?: string[]; env?: string[] };
   install?: unknown[];
@@ -91,7 +91,7 @@ export class SkillsLoader {
     }
 
     if (!filterUnavailable) return skills;
-    return skills.filter((s) => this._checkRequirements(this._getNanobotMeta(s.name)));
+    return skills.filter((s) => this._checkRequirements(this._getTarantulMeta(s.name)));
   }
 
   /** Load the raw content of a skill's SKILL.md by name. */
@@ -132,7 +132,7 @@ export class SkillsLoader {
     for (const s of allSkills) {
       const name = escapeXml(s.name);
       const desc = escapeXml(this._getSkillDescription(s.name));
-      const meta = this._getNanobotMeta(s.name);
+      const meta = this._getTarantulMeta(s.name);
       const available = this._checkRequirements(meta);
 
       lines.push(`  <skill available="${available ? "true" : "false"}">`);
@@ -156,7 +156,7 @@ export class SkillsLoader {
     return this.listSkills(true)
       .filter((s) => {
         const meta = this.getSkillMetadata(s.name) ?? {};
-        const nbMeta = this._getNanobotMeta(s.name);
+        const nbMeta = this._getTarantulMeta(s.name);
         return nbMeta.always === true || meta["always"] === "true";
       })
       .map((s) => s.name);
@@ -192,7 +192,7 @@ export class SkillsLoader {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private _checkRequirements(meta: NanobotSkillMeta): boolean {
+  private _checkRequirements(meta: TarantulSkillMeta): boolean {
     const req = meta.requires ?? {};
     for (const bin of req.bins ?? []) {
       if (!Bun.which(bin)) return false;
@@ -203,7 +203,7 @@ export class SkillsLoader {
     return true;
   }
 
-  private _getMissingRequirements(meta: NanobotSkillMeta): string {
+  private _getMissingRequirements(meta: TarantulSkillMeta): string {
     const missing: string[] = [];
     const req = meta.requires ?? {};
     for (const bin of req.bins ?? []) {
@@ -215,20 +215,20 @@ export class SkillsLoader {
     return missing.join(", ");
   }
 
-  private _getNanobotMeta(name: string): NanobotSkillMeta {
+  private _getTarantulMeta(name: string): TarantulSkillMeta {
     const raw = this.getSkillMetadata(name);
     if (!raw) return {};
-    return this._parseNanobotMetadata(raw["metadata"] ?? "");
+    return this._parseTarantulMetadata(raw["metadata"] ?? "");
   }
 
-  private _parseNanobotMetadata(raw: string): NanobotSkillMeta {
+  private _parseTarantulMetadata(raw: string): TarantulSkillMeta {
     if (!raw) return {};
     try {
       const data = JSON.parse(raw) as unknown;
       if (typeof data !== "object" || data === null) return {};
       const obj = data as Record<string, unknown>;
-      const nb = obj["nanobot"] ?? obj["openclaw"];
-      if (typeof nb === "object" && nb !== null) return nb as NanobotSkillMeta;
+      const nb = obj["tarantul"] ?? obj["nanobot"] ?? obj["openclaw"];
+      if (typeof nb === "object" && nb !== null) return nb as TarantulSkillMeta;
       return {};
     } catch {
       return {};

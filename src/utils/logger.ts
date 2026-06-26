@@ -6,7 +6,7 @@
 import pino, { type LoggerOptions } from "pino";
 
 const opts: LoggerOptions = {
-  name: "nanobot",
+  name: "tarantul",
   level: process.env["LOG_LEVEL"] ?? "info",
 };
 

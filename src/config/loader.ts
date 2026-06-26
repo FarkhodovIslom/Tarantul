@@ -1,6 +1,6 @@
 /**
  * Configuration loading utilities.
- * Mirrors nanobot/config/loader.py
+ * Mirrors tarantul/config/loader.py
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -20,7 +20,7 @@ export function setConfigPath(path: string): void {
 }
 
 export function getConfigPath(): string {
-  return _currentConfigPath ?? join(homedir(), ".nanobot", "config.json");
+  return _currentConfigPath ?? join(homedir(), ".tarantul", "config.json");
 }
 
 // ---------------------------------------------------------------------------

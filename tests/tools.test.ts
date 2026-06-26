@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const TMP = join(tmpdir(), "nanobot-test-" + Date.now());
+const TMP = join(tmpdir(), "tarantul-test-" + Date.now());
 
 describe("ToolRegistry", () => {
   it("registers and executes tools", async () => {
@@ -272,8 +272,8 @@ describe("Tool getters — readOnly / concurrencySafe / exclusive", () => {
 // ---------------------------------------------------------------------------
 
 describe("ReadFileTool — extraAllowedDirs", () => {
-  const TMP2 = join(tmpdir(), "nanobot-extra-" + Date.now());
-  const EXTRA_DIR = join(tmpdir(), "nanobot-extra-allowed-" + Date.now());
+  const TMP2 = join(tmpdir(), "tarantul-extra-" + Date.now());
+  const EXTRA_DIR = join(tmpdir(), "tarantul-extra-allowed-" + Date.now());
 
   it("allows reading from extraAllowedDirs even when restricted to workspace", async () => {
     mkdirSync(TMP2, { recursive: true });
@@ -290,8 +290,8 @@ describe("ReadFileTool — extraAllowedDirs", () => {
   });
 
   it("blocks reading outside both workspace and extraAllowedDirs", async () => {
-    const ws = join(tmpdir(), "nanobot-ws-" + Date.now());
-    const extra = join(tmpdir(), "nanobot-ex-" + Date.now());
+    const ws = join(tmpdir(), "tarantul-ws-" + Date.now());
+    const extra = join(tmpdir(), "tarantul-ex-" + Date.now());
     mkdirSync(ws, { recursive: true });
     mkdirSync(extra, { recursive: true });
 
