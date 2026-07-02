@@ -1,13 +1,3 @@
-/**
- * Async message queue for decoupled channel↔agent communication.
- * Mirrors nanobot/bus/queue.py
- *
- * RAM notes:
- * - Uses a single linked-list-style async queue per direction (no pre-allocation).
- * - Waiters are stored as Promise resolve callbacks — no extra wrapper objects.
- * - Messages are held by reference; no copying.
- */
-
 import type { InboundMessage, OutboundMessage } from "./events.js";
 
 // ---------------------------------------------------------------------------
@@ -18,10 +8,13 @@ class AsyncQueue<T> {
   /** Buffered items not yet consumed. */
   private readonly buf: T[] = [];
   /** Resolve callbacks waiting for the next item. */
-  private readonly waiters: Array<(item: T) => void> = [];
+  private readonly waiters: Array<(item: T | undefined) => void> = [];
+  /** Once closed, waiters are released with undefined and no new items accepted. */
+  private closed = false;
 
   /** Enqueue an item. If a waiter exists, resolve it immediately. */
   put(item: T): void {
+    if (this.closed) return;
     const waiter = this.waiters.shift();
     if (waiter) {
       waiter(item);
@@ -30,11 +23,17 @@ class AsyncQueue<T> {
     }
   }
 
-  /** Dequeue the next item, awaiting if the queue is empty. */
-  get(): Promise<T> {
+  /**
+   * Dequeue the next item, awaiting if the queue is empty.
+   * Resolves to `undefined` only when the queue is closed — callers use that
+   * as a shutdown signal. A single awaiter is registered per call, so no
+   * abandoned waiters accumulate (unlike a poll/timeout race).
+   */
+  get(): Promise<T | undefined> {
     const item = this.buf.shift();
     if (item !== undefined) return Promise.resolve(item);
-    return new Promise<T>((resolve) => this.waiters.push(resolve));
+    if (this.closed) return Promise.resolve(undefined);
+    return new Promise<T | undefined>((resolve) => this.waiters.push(resolve));
   }
 
   /** Non-blocking: returns undefined when queue is empty. */
@@ -49,6 +48,14 @@ class AsyncQueue<T> {
   /** Drain and return all buffered items without blocking. */
   drain(): T[] {
     return this.buf.splice(0);
+  }
+
+  /** Release all pending waiters with `undefined` and reject further items. */
+  close(): void {
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()!(undefined);
+    }
   }
 }
 
@@ -65,8 +72,8 @@ export class MessageBus {
     this._inbound.put(msg);
   }
 
-  /** Block until the next inbound message is available. */
-  consumeInbound(): Promise<InboundMessage> {
+  /** Block until the next inbound message is available (undefined when closed). */
+  consumeInbound(): Promise<InboundMessage | undefined> {
     return this._inbound.get();
   }
 
@@ -80,8 +87,8 @@ export class MessageBus {
     this._outbound.put(msg);
   }
 
-  /** Block until the next outbound message is available. */
-  consumeOutbound(): Promise<OutboundMessage> {
+  /** Block until the next outbound message is available (undefined when closed). */
+  consumeOutbound(): Promise<OutboundMessage | undefined> {
     return this._outbound.get();
   }
 
@@ -101,5 +108,21 @@ export class MessageBus {
 
   get outboundSize(): number {
     return this._outbound.size;
+  }
+
+  /** Wake the inbound consumer (gateway loop) for shutdown. */
+  closeInbound(): void {
+    this._inbound.close();
+  }
+
+  /** Wake the outbound consumer (channel dispatch loop) for shutdown. */
+  closeOutbound(): void {
+    this._outbound.close();
+  }
+
+  /** Close both directions. */
+  close(): void {
+    this._inbound.close();
+    this._outbound.close();
   }
 }

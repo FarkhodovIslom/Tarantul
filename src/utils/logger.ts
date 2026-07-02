@@ -1,7 +1,3 @@
-/**
- * Application logger using pino.
- * Drop-in replacement for Python's loguru.
- */
 
 import pino, { type LoggerOptions } from "pino";
 

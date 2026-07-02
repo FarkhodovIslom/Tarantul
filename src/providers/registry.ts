@@ -1,14 +1,3 @@
-/**
- * Provider Registry — single source of truth for LLM provider metadata.
- * Mirrors nanobot/providers/registry.py
- *
- * Adding a new provider:
- *   1. Add a ProviderSpec to PROVIDERS below.
- *   2. Add a field to ProvidersConfig in config/schema.ts.
- *   Done. Provider matching and status display all derive from here.
- *
- * Order matters — it controls match priority and fallback. Gateways first.
- */
 
 export interface ModelOverride {
   temperature?: number;

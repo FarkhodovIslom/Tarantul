@@ -1,7 +1,3 @@
-/**
- * Slash-command routing table.
- * Mirrors nanobot/command/router.py
- */
 
 import type { InboundMessage, OutboundMessage } from "../bus/events.js";
 import type { Session } from "../session/manager.js";
@@ -35,7 +31,7 @@ export interface AgentLoopRef {
   readonly startTime: number;
   sessions: {
     getOrCreate(key: string): Session;
-    save(session: Session): void;
+    save(session: Session): Promise<void>;
     invalidate(key: string): void;
   };
   activeTasks: Map<string, { cancel(): boolean; done: boolean }[]>;

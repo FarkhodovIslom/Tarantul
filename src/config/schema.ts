@@ -1,7 +1,3 @@
-/**
- * Configuration schema using Zod.
- * Mirrors nanobot/config/schema.py — accepts both camelCase and snake_case keys.
- */
 
 import { z } from "zod";
 
@@ -48,7 +44,7 @@ export type ChannelsConfig = z.infer<typeof ChannelsConfigSchema>;
 
 export const AgentDefaultsSchema = withAliases(
   z.object({
-    workspace: z.string().default("~/.nanobot/workspace"),
+    workspace: z.string().default("~/.tarantul/workspace"),
     model: z.string().default("anthropic/claude-opus-4-5"),
     provider: z.string().default("auto"),
     maxTokens: z.number().int().positive().default(8192),

@@ -44,3 +44,6 @@ bun-crash.txt
 
 # Typescript
 *.tsbuildinfo
+
+#AI Agents
+.claude

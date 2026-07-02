@@ -1,13 +1,8 @@
-/**
- * Configuration loading utilities.
- * Mirrors tarantul/config/loader.py
- */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { type Config, ConfigSchema } from "./schema.js";
-import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
 // Config path management (module-level singleton for multi-instance support)
@@ -27,21 +22,42 @@ export function getConfigPath(): string {
 // Load / save
 // ---------------------------------------------------------------------------
 
+/**
+ * Load config from disk. A missing file is expected on first run and yields
+ * defaults. A file that exists but is malformed (bad JSON) or fails schema
+ * validation throws instead of silently falling back to defaults — running
+ * with an unnoticed empty config (e.g. no API key) produces confusing
+ * downstream errors that are much harder to diagnose than a startup failure.
+ */
 export function loadConfig(configPath?: string): Config {
   const path = configPath ?? getConfigPath();
 
-  if (existsSync(path)) {
-    try {
-      const raw = readFileSync(path, "utf-8");
-      const data = JSON.parse(raw) as unknown;
-      const migrated = migrateConfig(data as Record<string, unknown>);
-      return ConfigSchema.parse(migrated);
-    } catch (err) {
-      logger.warn({ err, path }, "Failed to load config, using defaults");
-    }
+  if (!existsSync(path)) {
+    return ConfigSchema.parse({});
   }
 
-  return ConfigSchema.parse({});
+  const hint = `Fix the file, or remove it and run 'tarantul onboard' to regenerate defaults.`;
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch (err) {
+    throw new Error(`Failed to read config at ${path}: ${err}. ${hint}`);
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Config at ${path} is not valid JSON: ${err}. ${hint}`);
+  }
+
+  const migrated = migrateConfig(data as Record<string, unknown>);
+  const parsed = ConfigSchema.safeParse(migrated);
+  if (!parsed.success) {
+    throw new Error(`Config at ${path} failed validation:\n${parsed.error.message}\n${hint}`);
+  }
+  return parsed.data;
 }
 
 export function saveConfig(config: Config, configPath?: string): void {

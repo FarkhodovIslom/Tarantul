@@ -1,8 +1,3 @@
-/**
- * Abstract base class for all chat channel implementations.
- * Mirrors nanobot/channels/base.py
- */
-
 import { logger } from "../utils/logger.js";
 import type { MessageBus } from "../bus/queue.js";
 import type { OutboundMessage } from "../bus/events.js";

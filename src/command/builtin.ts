@@ -1,7 +1,3 @@
-/**
- * Built-in slash command handlers.
- * Mirrors nanobot/command/builtin.py
- */
 
 import type { OutboundMessage } from "../bus/events.js";
 import type { CommandContext } from "./router.js";
@@ -51,7 +47,9 @@ async function cmdNew(ctx: CommandContext): Promise<OutboundMessage> {
     const session = ctx.session ?? loop.sessions.getOrCreate(ctx.key);
     const snapshot = session.messages.slice(session.lastConsolidated);
     session.clear();
-    loop.sessions.save(session);
+    // Await the write before invalidating the cache — otherwise a concurrent
+    // getOrCreate() could reload the pre-clear file from disk in the gap.
+    await loop.sessions.save(session);
     loop.sessions.invalidate(session.key);
     if (snapshot.length) {
       // Archive snapshot in background — fire and forget

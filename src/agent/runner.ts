@@ -1,16 +1,3 @@
-/**
- * AgentRunner — shared execution loop for tool-using agents.
- * Mirrors nanobot/agent/runner.py
- *
- * RAM optimizations vs Python:
- * 1. MessageBuffer replaces list[dict] — zero-copy context windowing via
- *    windowStart pointer; no [dict(m) for m in messages] ever.
- * 2. applyToolResultBudget() mutates in place — no list clone on every turn.
- * 3. enforceContextBudget() shifts windowStart — no system_messages + kept copy.
- * 4. toProviderView() is the ONLY place a shallow array is allocated per LLM call.
- * 5. AgentHookContext holds only a snapshot reference — not a live messages ref.
- */
-
 import { MessageBuffer } from "./message-buffer.js";
 import { AgentHook } from "./hook.js";
 import type { AgentHookContext, ToolEvent } from "./hook.js";
@@ -103,6 +90,10 @@ export class AgentRunner {
     let stopReason = "completed";
     let error: string | null = null;
 
+    // Tool definitions don't change within a single run() call — estimate
+    // their token cost once instead of re-stringifying them every iteration.
+    const toolTokens = spec.contextWindowTokens ? estimateToolTokens(spec.tools) : 0;
+
     for (let iteration = 0; iteration < spec.maxIterations; iteration++) {
       // -----------------------------------------------------------------------
       // Context governance — in-place mutations, no list copies.
@@ -118,7 +109,6 @@ export class AgentRunner {
             (typeof this.provider.generation?.maxTokens === "number"
               ? this.provider.generation.maxTokens
               : 4096);
-          const toolTokens = estimateToolTokens(spec.tools);
           buf.enforceContextBudget(spec.contextWindowTokens, maxOut, toolTokens);
         }
       } catch (err) {

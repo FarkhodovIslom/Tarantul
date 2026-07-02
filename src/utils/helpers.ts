@@ -1,8 +1,3 @@
-/**
- * Shared text/message helpers.
- * Mirrors nanobot/utils/helpers.py (subset used by session + bus).
- */
-
 const _UNSAFE_CHARS = /[^\w\-. ]/g;
 
 /** Replace unsafe filesystem characters with underscores. */

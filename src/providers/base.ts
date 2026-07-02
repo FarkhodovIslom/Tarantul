@@ -1,8 +1,3 @@
-/**
- * Base LLM provider interface.
- * Mirrors nanobot/providers/base.py
- */
-
 import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------

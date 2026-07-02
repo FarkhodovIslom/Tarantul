@@ -1,7 +1,3 @@
-/**
- * Slack channel implementation using @slack/bolt (Socket Mode).
- * Mirrors nanobot/channels/slack.py
- */
 
 import { App as BoltApp, LogLevel, type AllMiddlewareArgs, type SlackEventMiddlewareArgs } from "@slack/bolt";
 import { logger } from "../utils/logger.js";

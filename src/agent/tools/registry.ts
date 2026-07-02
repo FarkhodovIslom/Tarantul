@@ -1,8 +1,3 @@
-/**
- * Tool registry for dynamic tool management.
- * Mirrors nanobot/agent/tools/registry.py
- */
-
 import type { Tool, ToolSchema } from "./base.js";
 
 const HINT = "\n\n[Analyze the error above and try a different approach.]";

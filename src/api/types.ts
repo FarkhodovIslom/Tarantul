@@ -1,11 +1,3 @@
-/**
- * OpenAI-compatible API request/response types.
- * Only the subset tarantul actually uses — keeps the type surface small.
- */
-
-// ---------------------------------------------------------------------------
-// Request
-// ---------------------------------------------------------------------------
 
 export interface ContentPart {
   type: "text" | "image_url" | string;
@@ -28,9 +20,6 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Response
-// ---------------------------------------------------------------------------
 
 export interface ChatChoice {
   index: number;

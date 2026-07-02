@@ -1,17 +1,3 @@
-/**
- * OpenAI-compatible HTTP API server for tarantul.
- *
- * Endpoints:
- *   POST /v1/chat/completions — single-turn chat (session-isolated)
- *   GET  /v1/models           — list the configured model
- *   GET  /health              — readiness probe
- *
- * Uses Bun.serve() — no external HTTP framework.
- * Per-session serialisation is implemented as a simple Promise-chain mutex
- * (Bun is single-threaded; the mutex prevents two concurrent awaits from
- *  interleaving reads/writes to the same session).
- */
-
 import { randomBytes } from "node:crypto";
 import { buildMessages } from "../agent/context.js";
 import { EMPTY_FINAL_RESPONSE_MESSAGE } from "../utils/runtime.js";
@@ -171,11 +157,18 @@ async function handleChatCompletions(
 
   logger.info({ sessionKey, content: userContent.slice(0, 80) }, "api request");
 
+  // The turn runs to completion regardless of the HTTP timeout. We must not
+  // release the session mutex until it actually settles — otherwise a timed-out
+  // turn keeps mutating session state while the next request runs concurrently,
+  // defeating the per-session serialization the mutex exists to provide.
+  const turn = runTurn(
+    userContent, sessionKey, runner, sessions, tools, runSpec, opts.modelName, opts.getSystemPrompt,
+  );
+  turn.catch(() => { /* surfaced below / on the timeout path */ })
+    .finally(() => release());
+
   try {
-    const responseText = await withTimeout(
-      runTurn(userContent, sessionKey, runner, sessions, tools, runSpec, opts.modelName, opts.getSystemPrompt),
-      opts.timeoutSecs * 1000,
-    );
+    const responseText = await withTimeout(turn, opts.timeoutSecs * 1000);
     return jsonResponse(chatCompletionResponse(responseText, opts.modelName));
   } catch (err) {
     if (err instanceof TimeoutError) {
@@ -183,8 +176,6 @@ async function handleChatCompletions(
     }
     logger.error({ err, sessionKey }, "api error");
     return errorResponse(500, "Internal server error", "server_error");
-  } finally {
-    release();
   }
 }
 
@@ -211,25 +202,25 @@ async function runTurn(
   });
 
   const result = await runner.run({ ...runSpec, initialMessages: messages });
-
-  // Persist
-  session.addMessage("user", userContent);
-  if (result.finalContent) {
-    session.addMessage("assistant", result.finalContent);
-  }
-  await sessions.save(session);
-
-  const text = result.finalContent?.trim() ?? "";
+  let text = result.finalContent?.trim() ?? "";
 
   // Retry once on empty
   if (!text) {
     logger.warn({ sessionKey }, "empty response, retrying once");
     const retry = await runner.run({ ...runSpec, initialMessages: messages });
-    const retryText = retry.finalContent?.trim() ?? "";
-    return retryText || EMPTY_FINAL_RESPONSE_MESSAGE;
+    text = retry.finalContent?.trim() ?? "";
   }
 
-  return text;
+  // Persist whatever was actually returned to the caller — including the
+  // retry's answer or the fallback message — so the session's history stays
+  // consistent with what the user saw. Persisting only after the retry
+  // resolves also avoids a user message with no matching assistant reply.
+  const finalText = text || EMPTY_FINAL_RESPONSE_MESSAGE;
+  session.addMessage("user", userContent);
+  session.addMessage("assistant", finalText);
+  await sessions.save(session);
+
+  return finalText;
 }
 
 async function handleModels(opts: ApiServerOpts): Promise<Response> {

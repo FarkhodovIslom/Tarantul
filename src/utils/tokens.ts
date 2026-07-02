@@ -1,13 +1,3 @@
-/**
- * Token counting utilities — RAM-optimized.
- *
- * Key optimizations vs Python version:
- * 1. Encoder is a module-level singleton, never re-initialized per call.
- * 2. Per-message estimates are cached in a WeakMap so repeated snip
- *    iterations don't recount unchanged messages.
- * 3. Full rebuild only happens when the cache is cold (first call or
- *    after a structural change that invalidates the cache).
- */
 
 import { getEncoding, type Tiktoken } from "js-tiktoken";
 

@@ -1,7 +1,3 @@
-/**
- * Runtime path helpers derived from the active config context.
- * Mirrors tarantul/config/paths.py
- */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";

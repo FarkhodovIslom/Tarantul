@@ -1,7 +1,3 @@
-/**
- * Provider factory — creates the right LLMProvider instance from config.
- * Mirrors the provider instantiation logic scattered across nanobot's runner.
- */
 
 import type { Config } from "../config/schema.js";
 import { getApiBase, getApiKey, getProviderName } from "../config/schema.js";

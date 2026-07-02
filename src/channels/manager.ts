@@ -1,9 +1,3 @@
-/**
- * ChannelManager — owns all enabled channels, routes outbound messages,
- * coalesces streaming deltas, and applies send-retry.
- *
- * Mirrors nanobot/channels/manager.py
- */
 
 import { logger } from "../utils/logger.js";
 import { registerBuiltins } from "./registry.js";
@@ -24,7 +18,6 @@ const SEND_RETRY_DELAYS_MS = [1000, 2000, 4000];
 
 export class ChannelManager {
   private readonly _channels = new Map<string, BaseChannel>();
-  private _dispatchHandle: ReturnType<typeof setTimeout> | null = null;
   private _dispatching = false;
 
   private constructor(
@@ -101,7 +94,9 @@ export class ChannelManager {
 
   async stopAll(): Promise<void> {
     this._dispatching = false;
-    if (this._dispatchHandle) { clearTimeout(this._dispatchHandle); this._dispatchHandle = null; }
+    // Wake the dispatch loop so it observes _dispatching=false and exits
+    // instead of blocking forever on consumeOutbound().
+    this._bus.closeOutbound();
 
     for (const [name, ch] of this._channels) {
       try { await ch.stop(); logger.info({ channel: name }, "channel stopped"); }
@@ -128,11 +123,11 @@ export class ChannelManager {
       if (pending.length > 0) {
         msg = pending.shift();
       } else {
-        // Wait up to 200ms for a message
-        msg = await Promise.race([
-          this._bus.consumeOutbound(),
-          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 200)),
-        ]);
+        // Block until a message arrives. A single awaiter is registered per
+        // iteration, so no abandoned waiters accumulate. `undefined` means the
+        // bus was closed (shutdown) — see MessageBus.closeOutbound().
+        msg = await this._bus.consumeOutbound();
+        if (msg === undefined) break;
       }
 
       if (!msg) continue;

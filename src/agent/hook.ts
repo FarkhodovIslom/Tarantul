@@ -1,13 +1,3 @@
-/**
- * Agent lifecycle hooks.
- * Mirrors nanobot/agent/hook.py
- *
- * RAM optimizations vs Python:
- * - AgentHookContext holds only a snapshot of the CURRENT iteration,
- *   not a reference to the full growing messages list.
- * - CompositeHook fan-out with per-hook error isolation.
- */
-
 import type { LLMResponse, ToolCallRequest } from "../providers/base.js";
 import { logger } from "../utils/logger.js";
 

@@ -1,8 +1,3 @@
-/**
- * Event types for the message bus.
- * Mirrors nanobot/bus/events.py
- */
-
 export interface InboundMessage {
   /** Source channel: telegram, discord, slack, cli, system, etc. */
   channel: string;

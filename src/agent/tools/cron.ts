@@ -1,8 +1,3 @@
-/**
- * CronTool — LLM-facing tool that wraps CronService.
- * Mirrors nanobot/agent/tools/cron.py
- */
-
 import { Tool } from "./base.js";
 import type { CronService } from "../../cron/service.js";
 import { type CronSchedule, validateTimezone } from "../../cron/types.js";
@@ -148,25 +143,25 @@ export class CronTool extends Tool {
       let atMs: number;
       try {
         const raw = at.trim();
-        // If no timezone in string, attach defaultTimezone
+        // If the string carries an explicit offset/Z it is an absolute instant;
+        // otherwise it is a naive wall-clock time in the default timezone.
         const hasOffset = /[Z+\-]\d{2}:?\d{0,2}$/.test(raw) || raw.endsWith("Z");
-        const isoStr = hasOffset
-          ? raw
-          : `${raw}[${this.defaultTimezone}]`;
-        const dt = new Date(hasOffset ? raw : raw); // parse naive first
-        if (isNaN(dt.getTime())) throw new Error("invalid date");
 
-        // For naive datetimes, treat as the default timezone
-        if (!hasOffset) {
-          // Use Intl to get the UTC offset at that local time in the default TZ
+        if (hasOffset) {
+          const dt = new Date(raw);
+          if (isNaN(dt.getTime())) throw new Error("invalid date");
+          atMs = dt.getTime();
+        } else {
           const tzErr2 = validateTimezone(this.defaultTimezone);
           if (tzErr2) return `Error: ${tzErr2}`;
-          // Re-parse using toLocaleString trick for offset resolution
-          const ref = new Date(raw + "Z"); // pretend UTC
-          const tzOffset = getTimezoneOffsetMs(ref, this.defaultTimezone);
-          atMs = ref.getTime() - tzOffset;
-        } else {
-          atMs = dt.getTime();
+          // Interpret the naive wall-clock time as being in the default timezone.
+          const naiveAsUtc = new Date(raw + "Z").getTime();
+          if (isNaN(naiveAsUtc)) throw new Error("invalid date");
+          // Resolve the timezone's UTC offset at that instant (refine once for DST).
+          let offset = tzOffsetMsAt(naiveAsUtc, this.defaultTimezone);
+          atMs = naiveAsUtc - offset;
+          offset = tzOffsetMsAt(atMs, this.defaultTimezone);
+          atMs = naiveAsUtc - offset;
         }
       } catch {
         return `Error: invalid ISO datetime format '${at}'. Expected format: YYYY-MM-DDTHH:MM:SS`;
@@ -256,19 +251,35 @@ function formatTiming(schedule: CronSchedule): string {
   }
 }
 
-/** Get UTC offset in ms for a given datetime in a timezone. */
-function getTimezoneOffsetMs(utcDate: Date, tz: string): number {
-  // Format the date in the target timezone and parse back to get local time
-  const localStr = utcDate.toLocaleString("en-CA", {
+/**
+ * UTC offset (wall-clock minus UTC) in ms for a timezone at a given instant.
+ *
+ * Renders the instant `utcMs` into the target timezone's wall-clock fields via
+ * Intl (which is independent of the server's local timezone), then reinterprets
+ * those fields as UTC. The difference is the zone's offset at that instant.
+ */
+function tzOffsetMsAt(utcMs: number, tz: string): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
+    hourCycle: "h23",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
   });
-  const localMs = new Date(localStr.replace(",", "")).getTime();
-  return localMs - utcDate.getTime();
+  const parts: Record<string, string> = {};
+  for (const p of dtf.formatToParts(new Date(utcMs))) {
+    if (p.type !== "literal") parts[p.type] = p.value;
+  }
+  const asUtc = Date.UTC(
+    Number(parts["year"]),
+    Number(parts["month"]) - 1,
+    Number(parts["day"]),
+    Number(parts["hour"]),
+    Number(parts["minute"]),
+    Number(parts["second"]),
+  );
+  return asUtc - utcMs;
 }

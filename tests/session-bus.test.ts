@@ -266,7 +266,7 @@ describe("MessageBus", () => {
       content: "hello",
     };
     await bus.publishInbound(msg);
-    const received = await bus.consumeInbound();
+    const received = (await bus.consumeInbound())!;
     expect(received.content).toBe("hello");
     expect(received.channel).toBe("cli");
   });
@@ -279,7 +279,7 @@ describe("MessageBus", () => {
       content: "response",
     };
     await bus.publishOutbound(msg);
-    const received = await bus.consumeOutbound();
+    const received = (await bus.consumeOutbound())!;
     expect(received.content).toBe("response");
   });
 
@@ -288,7 +288,7 @@ describe("MessageBus", () => {
     let received: InboundMessage | null = null;
 
     const consumer = bus.consumeInbound().then((m) => {
-      received = m;
+      received = m ?? null;
     });
 
     expect(received).toBeNull(); // not yet

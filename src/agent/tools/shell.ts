@@ -1,10 +1,8 @@
-/**
- * Shell execution tool.
- * Mirrors nanobot/agent/tools/shell.py
- */
-
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
+import { platform } from "node:os";
 import { Tool } from "./base.js";
+
+const IS_WINDOWS = platform() === "win32";
 
 const DENY_PATTERNS = [
   /\brm\s+-[rf]{1,2}\b/i,
@@ -79,19 +77,26 @@ export class ExecTool extends Tool {
 
     const env = { ...process.env };
     if (this.pathAppend) {
-      env["PATH"] = (env["PATH"] ?? "") + ":" + this.pathAppend;
+      env["PATH"] = (env["PATH"] ?? "") + delimiter + this.pathAppend;
     }
 
-    const proc = Bun.spawn(["sh", "-c", command], {
+    const shellCmd = IS_WINDOWS ? ["cmd.exe", "/d", "/s", "/c", command] : ["sh", "-c", command];
+
+    const proc = Bun.spawn(shellCmd, {
       cwd: workingDir,
       env,
       stdout: "pipe",
       stderr: "pipe",
+      // On POSIX, run as its own process group leader so a timeout can kill
+      // the whole tree (e.g. background children spawned by the command),
+      // not just the immediate `sh` process. See killTree() below.
+      ...(IS_WINDOWS ? {} : { detached: true }),
     });
 
-    const timeoutPromise = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), timeoutSec * 1000),
-    );
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutSec * 1000);
+    });
 
     const completionPromise = proc.exited.then(async () => {
       const stdout = await new Response(proc.stdout).text();
@@ -100,9 +105,13 @@ export class ExecTool extends Tool {
     });
 
     const winner = await Promise.race([completionPromise, timeoutPromise]);
+    // Always clear the timer — an uncleared timeout keeps a one-shot CLI
+    // invocation's event loop alive for up to `timeoutSec` after the command
+    // already finished normally.
+    if (timer) clearTimeout(timer);
 
     if (winner === "timeout") {
-      proc.kill();
+      this.killTree(proc);
       return `Error: Command timed out after ${timeoutSec} seconds`;
     }
 
@@ -123,6 +132,26 @@ export class ExecTool extends Tool {
     }
 
     return result;
+  }
+
+  /**
+   * Kill a timed-out command and its descendants, not just the immediate
+   * `sh`/`cmd.exe` process. On POSIX, the process was spawned detached (its
+   * own process group leader), so signalling the negative pid reaches the
+   * whole group — including background children the command may have left
+   * running (e.g. `sleep 100 &`). Falls back to single-process kill on
+   * Windows or if the group signal fails for any reason.
+   */
+  private killTree(proc: ReturnType<typeof Bun.spawn>): void {
+    if (!IS_WINDOWS) {
+      try {
+        process.kill(-proc.pid, "SIGTERM");
+        return;
+      } catch {
+        // fall through to single-process kill
+      }
+    }
+    proc.kill();
   }
 
   private guardCommand(command: string, cwd: string): string | null {

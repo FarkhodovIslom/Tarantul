@@ -1,15 +1,10 @@
-/**
- * Anthropic provider — native SDK integration for Claude models.
- * Mirrors nanobot/providers/anthropic_provider.py
- */
-
 import Anthropic from "@anthropic-ai/sdk";
 import { randomBytes } from "node:crypto";
 import type { ChatOptions, ChatStreamOptions, LLMResponse, ToolCallRequest } from "./base.js";
 import { LLMProvider, sanitizeEmptyContent } from "./base.js";
 
 const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-const IDLE_TIMEOUT_MS = parseInt(process.env["NANOBOT_STREAM_IDLE_TIMEOUT_S"] ?? "90") * 1000;
+const IDLE_TIMEOUT_MS = parseInt(process.env["TARANTUL_STREAM_IDLE_TIMEOUT_S"] ?? "90") * 1000;
 
 function genToolId(): string {
   const bytes = randomBytes(22);
@@ -398,15 +393,27 @@ export class AnthropicProvider extends LLMProvider {
   }
 
   override async chatStream(opts: ChatStreamOptions): Promise<LLMResponse> {
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
     try {
       const kwargs = this.buildKwargs(opts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stream = this.client.messages.stream(kwargs as any);
 
+      // Enforce an idle timeout: `streamEvent` fires for every chunk the SDK
+      // processes (whether consumed via the async iterator or finalMessage()
+      // below), so resetting the timer on each one aborts a genuinely stalled
+      // connection instead of hanging indefinitely.
+      const resetIdleTimer = (): void => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => stream.abort(), IDLE_TIMEOUT_MS);
+      };
+      resetIdleTimer();
+      stream.on("streamEvent", resetIdleTimer);
+
       if (opts.onContentDelta) {
-        const textStream = stream.toReadableStream();
-        const reader = textStream.getReader();
-        // Stream text deltas
+        // Manual iteration (not the `text` event) preserves in-order,
+        // backpressured delivery — each delta is awaited before the next
+        // chunk is processed, matching how the caller's renderer expects it.
         for await (const event of stream) {
           if (
             event.type === "content_block_delta" &&
@@ -416,14 +423,13 @@ export class AnthropicProvider extends LLMProvider {
             await opts.onContentDelta(event.delta.text);
           }
         }
-        reader.cancel();
       }
 
       const response = await stream.finalMessage();
       return parseResponse(response);
     } catch (err) {
       const msg = String(err);
-      if (msg.includes("stalled") || msg.includes("timeout")) {
+      if (msg.includes("stalled") || msg.includes("timeout") || msg.includes("Request was aborted")) {
         return {
           content: `Error calling LLM: stream stalled for more than ${IDLE_TIMEOUT_MS / 1000} seconds`,
           toolCalls: [],
@@ -432,6 +438,8 @@ export class AnthropicProvider extends LLMProvider {
         };
       }
       return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
     }
   }
 }

@@ -212,7 +212,7 @@ describe("registerBuiltinCommands", () => {
       startTime: Date.now() / 1000,
       sessions: {
         getOrCreate: () => { throw new Error("not used"); },
-        save: () => {},
+        save: async () => {},
         invalidate: () => {},
       },
       activeTasks: new Map([
@@ -249,7 +249,7 @@ describe("registerBuiltinCommands", () => {
       startTime: Date.now() / 1000 - 90, // 90s ago
       sessions: {
         getOrCreate: () => fakeSession as never,
-        save: () => {},
+        save: async () => {},
         invalidate: () => {},
       },
       activeTasks: new Map(),

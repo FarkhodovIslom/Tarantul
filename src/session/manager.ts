@@ -1,17 +1,3 @@
-/**
- * Session management for conversation history.
- * Mirrors nanobot/session/manager.py
- *
- * Storage format: JSONL per session.
- *   Line 0  → metadata record  { _type:"metadata", key, created_at, updated_at, metadata, last_consolidated }
- *   Line 1+ → message objects
- *
- * RAM notes:
- * - In-memory cache is a plain Map<string, Session> — no double-boxing.
- * - `getHistory()` slices unconsolidated messages only; the full buffer is
- *    held once and referenced, never copied per call.
- * - `save()` streams lines with Bun.file write — no full-string concat.
- */
 
 import { join } from "node:path";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
@@ -163,8 +149,16 @@ export class SessionManager {
     return session;
   }
 
-  /** Persist a session to disk (JSONL). */
-  save(session: Session): void {
+  /**
+   * Persist a session to disk (JSONL), atomically.
+   *
+   * Writes to a temp file in the same directory, then renames it over the
+   * target path. `rename` is atomic on the same filesystem, so a crash or
+   * concurrent read never observes a partially-written session file. The
+   * in-memory cache is updated synchronously regardless of disk outcome;
+   * callers that need durability should await the returned promise.
+   */
+  async save(session: Session): Promise<void> {
     const path = this._sessionPath(session.key);
     session.updatedAt = new Date();
 
@@ -183,12 +177,20 @@ export class SessionManager {
       lines.push(JSON.stringify(msg));
     }
 
-    // Write via Bun.write — fire-and-forget
-    Bun.write(path, lines.join("\n") + "\n").catch((err) => {
-      logger.error({ err, key: session.key }, "Failed to persist session");
-    });
-
     this.cache.set(session.key, session);
+
+    const tmpPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      await Bun.write(tmpPath, lines.join("\n") + "\n");
+      renameSync(tmpPath, path);
+    } catch (err) {
+      logger.error({ err, key: session.key }, "Failed to persist session");
+      try {
+        require("node:fs").unlinkSync(tmpPath);
+      } catch {
+        // tmp file was never created — nothing to clean up
+      }
+    }
   }
 
   /** Evict a session from the in-memory cache (forces disk reload next access). */

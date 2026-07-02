@@ -1,16 +1,3 @@
-/**
- * MessageBuffer — RAM-efficient message store with zero-copy windowing.
- *
- * Key optimizations vs Python list[dict]:
- * 1. No list(messages) copy on every run — append-only, O(1) push.
- * 2. Context windowing via windowStart pointer — no array slicing.
- * 3. Incremental token tracking via TokenTracker — O(1) per message.
- * 4. Tool-result budget applied in-place (mutate slot, not clone list).
- * 5. Snip returns (windowStart, absoluteStart) — zero new allocations.
- * 6. toProviderView() does ONE shallow slice (array of references) only
- *    when actually needed for the LLM call.
- */
-
 import { TokenTracker, estimateMessageTokens } from "../utils/tokens.js";
 import { logger } from "../utils/logger.js";
 
@@ -225,8 +212,18 @@ export class MessageBuffer {
     return this.msgs.length - this.windowStart;
   }
 
+  /**
+   * Token estimate for the current window only — matches what would actually
+   * be sent to the provider (window range + system message if it's outside
+   * the window). `tracker.totalTokens` is the all-time running total and
+   * never shrinks when windowStart advances (dropFirst() is intentionally
+   * never called: messages before windowStart stay in `msgs` for session
+   * persistence, so splicing the tracker's parallel array would desync its
+   * indices from `msgs`). Reuses the same estimate `enforceContextBudget()`
+   * uses to decide when to snip, so the two stay consistent.
+   */
   get totalTokens(): number {
-    return this.tracker.totalTokens;
+    return estimateCurrentTokens(this.msgs, this.windowStart, this.systemMsgIndex);
   }
 
   /** Last message appended (or undefined). */

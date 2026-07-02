@@ -1,8 +1,3 @@
-/**
- * Cron types.
- * Mirrors nanobot/cron/types.py
- */
-
 export type CronScheduleKind = "at" | "every" | "cron";
 export type CronPayloadKind = "system_event" | "agent_turn";
 export type CronStatus = "ok" | "error" | "skipped";

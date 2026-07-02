@@ -1,8 +1,3 @@
-/**
- * Discord channel implementation using discord.js.
- * Mirrors nanobot/channels/discord.py
- */
-
 import {
   Client,
   GatewayIntentBits,

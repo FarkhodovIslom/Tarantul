@@ -1,8 +1,3 @@
-/**
- * Interactive REPL for the CLI agent.
- * Uses node:readline (Bun-compatible) with file-based history.
- */
-
 import { createInterface, type Interface } from "node:readline";
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";

@@ -1,10 +1,3 @@
-/**
- * Telegram channel implementation using grammY.
- * Mirrors tarantul/channels/telegram.py
- *
- * Transport: long polling (no webhook / public IP needed).
- * Streaming: progressive message editing at STREAM_EDIT_INTERVAL_MS cadence.
- */
 
 import { Bot, Context, InputFile } from "grammy";
 import type { Message, User } from "@grammyjs/types";

@@ -1,17 +1,6 @@
-#!/usr/bin/env bun
-/**
- * CLI entry point.
- * Replaces Python typer app — parses process.argv manually (no deps).
- *
- * Subcommands:
- *   agent    — interactive or one-shot chat
- *   onboard  — create / update config
- *   serve    — OpenAI-compatible API server (stub, implemented in Phase 8)
- *   version  — print version
- */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import {
   styled, ansi, printResponse, printProgress,
   StreamRenderer, ToolStatusRenderer, toolStatusLabel,
@@ -28,8 +17,13 @@ import { ExecTool } from "../agent/tools/shell.js";
 import { AgentRunner } from "../agent/runner.js";
 import { buildMessages, SystemPromptCache } from "../agent/context.js";
 import { CommandRouter, registerBuiltinCommands, buildHelpText } from "../command/index.js";
-import { MemoryStore } from "../agent/memory.js";
+import { MemoryStore, MemoryConsolidator } from "../agent/memory.js";
 import { SkillsLoader, BUILTIN_SKILLS_DIR } from "../skills/index.js";
+import { getCronDir } from "../config/paths.js";
+import { AgentLoop } from "../agent/loop.js";
+import { MessageBus } from "../bus/queue.js";
+import { CronService } from "../cron/service.js";
+import { CronTool } from "../agent/tools/cron.js";
 
 import { AgentHook } from "../agent/hook.js";
 import type { AgentHookContext, ToolEvent } from "../agent/hook.js";
@@ -254,6 +248,16 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     }));
   }
 
+  const bus = new MessageBus();
+
+  // Cron service — its onJob callback is late-bound to the AgentLoop below.
+  let loop: AgentLoop | null = null;
+  const cron = new CronService(join(getCronDir(), "jobs.json"), (job) =>
+    loop ? loop.handleCronJob(job) : Promise.resolve(null),
+  );
+  const cronTool = new CronTool(cron, cfg.agents.defaults.timezone);
+  tools.register(cronTool);
+
   const runner = new AgentRunner(provider);
   const runSpec = {
     tools,
@@ -273,8 +277,41 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     const memory = memoryStore.getMemoryContext();
     const skillsSummary = skillsLoader.buildSkillsSummary();
     const alwaysContent = skillsLoader.loadSkillsForContext(skillsLoader.getAlwaysSkills());
-    return promptCache.get(memory, skillsSummary, alwaysContent);
+    return promptCache.get(memory, skillsSummary, alwaysContent, tools.toolNames);
   };
+
+  // Memory consolidation — compresses long sessions into MEMORY.md/HISTORY.md.
+  const consolidator = new MemoryConsolidator({
+    workspace: wsPath,
+    provider,
+    model: modelName,
+    sessions,
+    contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
+    maxCompletionTokens: cfg.agents.defaults.maxTokens,
+    buildMessages: (o) =>
+      buildMessages({
+        history: o.history,
+        currentMessage: o.currentMessage,
+        systemPrompt: getSystemPrompt(),
+        channel: o.channel ?? null,
+        chatId: o.chatId ?? null,
+        timezone: cfg.agents.defaults.timezone,
+      }),
+    getToolDefinitions: () => tools.getDefinitions(),
+  });
+
+  // Gateway loop: bus (inbound) → AgentRunner → bus (outbound).
+  loop = new AgentLoop({
+    bus,
+    runner,
+    sessions,
+    runSpec,
+    getSystemPrompt,
+    timezone: cfg.agents.defaults.timezone,
+    cronTool,
+    consolidator,
+    sendProgress: cfg.channels.sendProgress,
+  });
 
   const { startApiServer } = await import("../api/server.js");
   const server = startApiServer(
@@ -284,8 +321,6 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
 
   // Channel manager (Telegram/Slack/Discord) — only started if any channel is enabled
   const { ChannelManager } = await import("../channels/manager.js");
-  const { MessageBus } = await import("../bus/queue.js");
-  const bus = new MessageBus();
   const channelManager = await ChannelManager.create(cfg, bus);
 
   console.log(`${LOGO} tarantul`);
@@ -301,13 +336,25 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   console.log();
   console.log(styled("Press Ctrl+C to stop.", ansi.dim));
 
+  // Start the gateway loop and cron scheduler before channels so inbound
+  // messages are consumed the moment a channel delivers them.
+  loop.start();
+  await cron.start();
+
   // Start channels (non-blocking — each channel loops internally)
   const channelTask = channelManager.startAll();
 
   // Block until SIGINT/SIGTERM
+  const shutdown = async (resolveFn: () => void): Promise<void> => {
+    server.stop();
+    cron.stop();
+    await channelManager.stopAll();
+    await loop!.stop();
+    resolveFn();
+  };
   await new Promise<void>((resolve) => {
-    process.once("SIGINT", async () => { server.stop(); await channelManager.stopAll(); resolve(); });
-    process.once("SIGTERM", async () => { server.stop(); await channelManager.stopAll(); resolve(); });
+    process.once("SIGINT", () => void shutdown(resolve));
+    process.once("SIGTERM", () => void shutdown(resolve));
   });
   await channelTask;
 }
@@ -368,7 +415,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     const skillsSummary = skillsLoader.buildSkillsSummary();
     const alwaysSkills = skillsLoader.getAlwaysSkills();
     const alwaysContent = skillsLoader.loadSkillsForContext(alwaysSkills);
-    return promptCache.get(memory, skillsSummary, alwaysContent);
+    return promptCache.get(memory, skillsSummary, alwaysContent, tools.toolNames);
   }
 
   // Command router for /slash commands
@@ -427,7 +474,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         : []),
     );
     session.updatedAt = new Date();
-    sessions.save(session);
+    await sessions.save(session);
 
     return result.finalContent;
   }

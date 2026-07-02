@@ -1,7 +1,4 @@
 /**
- * Skills loader — discovers, loads, and formats skills for context injection.
- * Mirrors tarantul/agent/skills.py
- *
  * Skills are subdirectories containing a SKILL.md file with YAML frontmatter:
  *   name        — hyphen-case identifier
  *   description — what the skill does (used in summary)

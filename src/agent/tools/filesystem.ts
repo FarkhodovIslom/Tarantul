@@ -1,8 +1,3 @@
-/**
- * File system tools: read_file, write_file, edit_file, list_dir.
- * Mirrors nanobot/agent/tools/filesystem.py
- */
-
 import {
   existsSync,
   mkdirSync,
@@ -334,8 +329,9 @@ export class ListDirTool extends FsTool {
       let total = 0;
 
       if (recursive) {
-        collectRecursive(dp, dp, items, { total: 0, cap: maxEntries });
-        total = items.length; // approximate
+        const state = { total: 0, cap: maxEntries };
+        collectRecursive(dp, dp, items, state);
+        total = state.total;
       } else {
         const entries = readdirSync(dp).sort();
         for (const name of entries) {
@@ -382,7 +378,7 @@ function collectRecursive(
     state.total++;
     let isDir = false;
     try { isDir = statSync(full).isDirectory(); } catch { continue; }
-    items.push(isDir ? `${rel}/` : rel);
+    if (items.length < state.cap) items.push(isDir ? `${rel}/` : rel);
     if (isDir) collectRecursive(root, full, items, state);
   }
 }

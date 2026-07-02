@@ -1,7 +1,3 @@
-/**
- * Channel registry — maps channel names to constructor classes.
- * Built-in channels are registered here; external plugins can add more.
- */
 
 import type { BaseChannel } from "./base.js";
 import type { MessageBus } from "../bus/queue.js";

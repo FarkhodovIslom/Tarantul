@@ -1,7 +1,3 @@
-/**
- * Terminal rendering utilities — ANSI-only, no external deps.
- * Replaces rich/markdown in the Python CLI.
- */
 
 // ---------------------------------------------------------------------------
 // ANSI escape helpers

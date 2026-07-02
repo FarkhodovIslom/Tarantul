@@ -1,12 +1,4 @@
-/**
- * CronService — manages and executes scheduled jobs.
- * Mirrors nanobot/cron/service.py
- *
- * Design:
- * - Single timer per service (armed to the nearest next-run time).
- * - Jobs stored in JSONL-adjacent JSON file, reloaded on mtime change.
- * - on_job callback fires per job; caller wires it to the agent loop.
- */
+
 
 import { existsSync, statSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -23,6 +15,8 @@ import {
 } from "./types.js";
 
 const MAX_RUN_HISTORY = 20;
+/** setTimeout delays above this (~24.8 days) overflow to 0 and fire immediately. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (JSON ↔ domain types)
@@ -311,7 +305,13 @@ export class CronService {
     if (!this.store) return;
     const now = nowMs();
     for (const job of this.store.jobs) {
-      if (job.enabled) {
+      if (!job.enabled) continue;
+      if (job.schedule.kind === "at") {
+        // Preserve the one-shot target. computeNextRun() returns null for a
+        // past time, which would silently drop a run missed while the process
+        // was down; keeping atMs makes it immediately due instead.
+        job.state.nextRunAtMs = job.schedule.atMs ?? job.state.nextRunAtMs ?? null;
+      } else {
         job.state.nextRunAtMs = computeNextRun(job.schedule, now);
       }
     }
@@ -335,12 +335,19 @@ export class CronService {
     const nextWake = this._getNextWakeMs();
     if (nextWake === null) return;
 
-    const delayMs = Math.max(0, nextWake - nowMs());
+    // Clamp to the 32-bit setTimeout ceiling. Delays beyond it overflow and
+    // fire immediately; instead we wake at the ceiling and re-arm, walking
+    // toward the true target in ~24-day hops.
+    const delayMs = Math.min(Math.max(0, nextWake - nowMs()), MAX_TIMER_DELAY_MS);
     this.timer = setTimeout(() => {
       this.timer = null;
-      if (this.running) {
-        this._onTimer().catch((err) => logger.error({ err }, "Cron timer error"));
+      if (!this.running) return;
+      // If we only advanced to the interim ceiling, re-arm without firing jobs.
+      if (nowMs() < nextWake) {
+        this._armTimer();
+        return;
       }
+      this._onTimer().catch((err) => logger.error({ err }, "Cron timer error"));
     }, delayMs);
   }
 

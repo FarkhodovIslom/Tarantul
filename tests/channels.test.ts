@@ -97,7 +97,7 @@ describe("BaseChannel._handleMessage", () => {
       content: "hi there",
     });
 
-    const msg = await bus.consumeInbound();
+    const msg = (await bus.consumeInbound())!;
     expect(msg.content).toBe("hi there");
     expect(msg.chatId).toBe("room1");
     expect(msg.channel).toBe("fake");
@@ -127,7 +127,7 @@ describe("BaseChannel._handleMessage", () => {
       content: "stream me",
     });
 
-    const msg = await bus.consumeInbound();
+    const msg = (await bus.consumeInbound())!;
     expect(msg.metadata?.["_wants_stream"]).toBe(true);
   });
 
@@ -142,7 +142,7 @@ describe("BaseChannel._handleMessage", () => {
       sessionKeyOverride: "custom:key",
     });
 
-    const msg = await bus.consumeInbound();
+    const msg = (await bus.consumeInbound())!;
     expect(msg.sessionKeyOverride).toBe("custom:key");
   });
 });

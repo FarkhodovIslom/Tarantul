@@ -1,21 +1,3 @@
-/**
- * Memory consolidation system.
- * Mirrors nanobot/agent/memory.py
- *
- * Two-layer storage:
- *   MEMORY.md  — long-term facts (full rewrite on update)
- *   HISTORY.md — append-only chronological log
- *
- * Consolidation flow:
- *   1. LLM is asked to call save_memory(history_entry, memory_update)
- *   2. history_entry is appended to HISTORY.md
- *   3. memory_update replaces MEMORY.md if it differs
- *
- * RAM notes:
- * - Per-session lock stored in WeakRef map so idle sessions don't retain locks.
- * - Message chunk for consolidation is a slice reference — no extra copy.
- */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LLMProvider } from "../providers/base.js";
@@ -254,8 +236,15 @@ export class MemoryConsolidator {
   private readonly maxCompletionTokens: number;
   private readonly buildMessages: ConsolidatorOptions["buildMessages"];
   private readonly getToolDefinitions: ConsolidatorOptions["getToolDefinitions"];
-  /** WeakRef locks so idle sessions don't retain lock objects. */
-  private readonly locks = new Map<string, WeakRef<Promise<void>>>();
+  /**
+   * Per-session consolidation lock, keyed by session key. Each call chains
+   * onto the previous one so consolidations for the same session never run
+   * concurrently. Entries are deleted once their promise settles (see
+   * `maybeConsolidateByTokens`) so this map doesn't grow forever — a plain
+   * Map with explicit cleanup, rather than WeakRef, so removal doesn't
+   * depend on GC timing.
+   */
+  private readonly locks = new Map<string, Promise<void>>();
 
   private static readonly MAX_CONSOLIDATION_ROUNDS = 5;
   private static readonly SAFETY_BUFFER = 1024;
@@ -328,19 +317,22 @@ export class MemoryConsolidator {
   async maybeConsolidateByTokens(session: Session): Promise<void> {
     if (!session.messages.length || this.contextWindowTokens <= 0) return;
 
-    // Serialize consolidation per session key using a simple lock chain
+    // Serialize consolidation per session key: chain onto whatever is
+    // currently running for this key (if anything), so at most one
+    // consolidation round is ever in flight per session.
     const lockKey = session.key;
-    const existingRef = this.locks.get(lockKey);
-    let existingLock = existingRef?.deref();
+    const previous = this.locks.get(lockKey) ?? Promise.resolve();
 
-    const runConsolidation = async () => {
-      if (existingLock) await existingLock;
-      await this._doConsolidate(session);
-    };
+    // A prior round's failure shouldn't block this one from running.
+    const current = previous.catch(() => {}).then(() => this._doConsolidate(session));
+    this.locks.set(lockKey, current);
 
-    const lockPromise = runConsolidation();
-    this.locks.set(lockKey, new WeakRef(lockPromise));
-    await lockPromise;
+    try {
+      await current;
+    } finally {
+      // Only clear the slot if nothing newer has queued behind us.
+      if (this.locks.get(lockKey) === current) this.locks.delete(lockKey);
+    }
   }
 
   private async _doConsolidate(session: Session): Promise<void> {
@@ -369,7 +361,7 @@ export class MemoryConsolidator {
       if (!ok) return;
 
       session.lastConsolidated = boundary.endIdx;
-      this.sessions.save(session);
+      await this.sessions.save(session);
 
       estimated = this.estimateSessionPromptTokens(session);
       if (estimated <= 0) return;

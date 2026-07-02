@@ -1,7 +1,3 @@
-/**
- * Runtime-specific helper functions and constants.
- * Mirrors nanobot/utils/runtime.py
- */
 
 import { logger } from "./logger.js";
 

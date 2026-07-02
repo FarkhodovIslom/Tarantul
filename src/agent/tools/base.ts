@@ -1,8 +1,3 @@
-/**
- * Base class for agent tools.
- * Mirrors nanobot/agent/tools/base.py
- */
-
 export interface ToolSchema {
   type: "function";
   function: {
