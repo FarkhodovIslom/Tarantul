@@ -4,13 +4,17 @@ const HINT = "\n\n[Analyze the error above and try a different approach.]";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
+  /** Cached getDefinitions() result — invalidated on register()/unregister(). */
+  private definitionsCache: ToolSchema[] | null = null;
 
   register(tool: Tool): void {
     this.tools.set(tool.name, tool);
+    this.definitionsCache = null;
   }
 
   unregister(name: string): void {
     this.tools.delete(name);
+    this.definitionsCache = null;
   }
 
   get(name: string): Tool | undefined {
@@ -30,7 +34,10 @@ export class ToolRegistry {
   }
 
   getDefinitions(): ToolSchema[] {
-    return [...this.tools.values()].map((t) => t.toSchema());
+    if (!this.definitionsCache) {
+      this.definitionsCache = [...this.tools.values()].map((t) => t.toSchema());
+    }
+    return this.definitionsCache;
   }
 
   prepareCall(

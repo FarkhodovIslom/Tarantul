@@ -1,8 +1,27 @@
 
 import { join } from "node:path";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, openSync, readSync, closeSync } from "node:fs";
 import { logger } from "../utils/logger.js";
 import { safeFilename, findLegalMessageStart } from "../utils/helpers.js";
+
+/** Bytes read from the start of a session file to extract its metadata line. */
+const METADATA_HEAD_BYTES = 8192;
+
+/**
+ * Read a bounded prefix of a file synchronously, without loading the whole
+ * thing. Used by `listSessions()` — session files can grow to megabytes of
+ * conversation history, but the metadata line we need is always line 1.
+ */
+function readHead(filePath: string, maxBytes: number): string {
+  const fd = openSync(filePath, "r");
+  try {
+    const buf = Buffer.alloc(maxBytes);
+    const bytesRead = readSync(fd, buf, 0, maxBytes, 0);
+    return buf.toString("utf-8", 0, bytesRead);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Session
@@ -221,9 +240,11 @@ export class SessionManager {
 
     for (const filePath of entries) {
       try {
-        // Read only the first line (metadata)
-        const content = require("node:fs").readFileSync(filePath, "utf-8") as string;
-        const firstLine = content.split("\n")[0]?.trim();
+        // Read a bounded prefix, not the whole file — session files can hold
+        // megabytes of conversation history, but the metadata we need is
+        // always on line 1.
+        const head = readHead(filePath, METADATA_HEAD_BYTES);
+        const firstLine = head.split("\n")[0]?.trim();
         if (!firstLine) continue;
         const data = JSON.parse(firstLine) as Record<string, unknown>;
         if (data["_type"] !== "metadata") continue;

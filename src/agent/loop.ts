@@ -1,4 +1,5 @@
 import { buildMessages } from "./context.js";
+import { recordTurnUsage } from "./usage.js";
 import { logger } from "../utils/logger.js";
 import { sessionKey as deriveSessionKey } from "../bus/events.js";
 import type { InboundMessage } from "../bus/events.js";
@@ -175,6 +176,7 @@ export class AgentLoop {
     // Persist the exchange.
     session.addMessage("user", spec.userMessage);
     if (result.finalContent) session.addMessage("assistant", result.finalContent);
+    recordTurnUsage(session, result.usage, this.runSpec.model);
     await this.sessions.save(session);
 
     // Best-effort memory consolidation.

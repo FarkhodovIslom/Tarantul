@@ -2,6 +2,7 @@
 import type { OutboundMessage } from "../bus/events.js";
 import type { CommandContext } from "./router.js";
 import { CommandRouter } from "./router.js";
+import { getSessionUsage, formatUsageSummary } from "../agent/usage.js";
 
 const VERSION = "0.1.0";
 
@@ -110,6 +111,20 @@ async function cmdStatus(ctx: CommandContext): Promise<OutboundMessage> {
   };
 }
 
+async function cmdUsage(ctx: CommandContext): Promise<OutboundMessage> {
+  const msg = ctx.msg;
+  const loop = ctx.loop;
+  const session = ctx.session ?? (loop ? loop.sessions.getOrCreate(ctx.key) : null);
+  const usage = session ? getSessionUsage(session) : null;
+
+  return {
+    channel: msg.channel,
+    chatId: msg.chatId,
+    content: formatUsageSummary(usage),
+    metadata: { renderAs: "text" },
+  };
+}
+
 async function cmdHelp(ctx: CommandContext): Promise<OutboundMessage> {
   return {
     channel: ctx.msg.channel,
@@ -126,11 +141,13 @@ async function cmdHelp(ctx: CommandContext): Promise<OutboundMessage> {
 export function buildHelpText(): string {
   return [
     "🐈 nanobot commands:",
-    "/new     — Start a new conversation",
-    "/stop    — Stop the current task",
-    "/restart — Restart the bot",
-    "/status  — Show bot status",
-    "/help    — Show available commands",
+    "/new      — Start a new conversation",
+    "/stop     — Stop the current task",
+    "/restart  — Restart the bot",
+    "/status   — Show bot status",
+    "/usage    — Show this session's token usage and estimated cost",
+    "/settings — View/change model, API keys, generation params, skills",
+    "/help     — Show available commands",
   ].join("\n");
 }
 
@@ -140,5 +157,6 @@ export function registerBuiltinCommands(router: CommandRouter): void {
   router.priority("/status", cmdStatus);
   router.exact("/new", cmdNew);
   router.exact("/status", cmdStatus);
+  router.exact("/usage", cmdUsage);
   router.exact("/help", cmdHelp);
 }

@@ -75,8 +75,12 @@ export class Repl {
     }
   }
 
-  /** Read one line from the user. Returns null on EOF (Ctrl-D). */
-  readLine(): Promise<string | null> {
+  /**
+   * Read one line from the user. Returns null on EOF (Ctrl-D). Pass
+   * `{ history: false }` for sensitive input (e.g. API keys) so it never
+   * touches the on-disk CLI history file.
+   */
+  readLine(opts?: { history?: boolean }): Promise<string | null> {
     return new Promise((resolve) => {
       if (!this.rl) {
         resolve(null);
@@ -86,7 +90,7 @@ export class Repl {
       const prompt = styled("You: ", ansi.bold + ansi.blue);
       this.rl.question(prompt, (answer) => {
         const line = answer ?? "";
-        if (this.history) this.history.push(line);
+        if (this.history && opts?.history !== false) this.history.push(line);
         resolve(line);
       });
 

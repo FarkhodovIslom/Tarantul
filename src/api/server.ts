@@ -1,5 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { buildMessages } from "../agent/context.js";
+import { recordTurnUsage } from "../agent/usage.js";
 import { EMPTY_FINAL_RESPONSE_MESSAGE } from "../utils/runtime.js";
 import { logger } from "../utils/logger.js";
 import type { AgentRunner, AgentRunSpec } from "../agent/runner.js";
@@ -21,6 +22,17 @@ import type {
 const API_CHANNEL = "api";
 const API_CHAT_ID = "default";
 const DEFAULT_SESSION_KEY = "api:default";
+
+/** Bounds for the client-supplied session_id — see isValidSessionId(). */
+const SESSION_ID_MAX_LENGTH = 128;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+
+/** Max distinct session keys the mutex registry tracks — see MutexRegistry. */
+const MAX_TRACKED_SESSIONS = 500;
+
+function isValidSessionId(id: string): boolean {
+  return id.length > 0 && id.length <= SESSION_ID_MAX_LENGTH && SESSION_ID_PATTERN.test(id);
+}
 
 // ---------------------------------------------------------------------------
 // Async mutex — one active request per session key
@@ -45,6 +57,51 @@ class Mutex {
   }
 }
 
+/**
+ * Bounded, LRU-evicting registry of per-session mutexes.
+ *
+ * Without a cap, an attacker who can reach this endpoint could send an
+ * unbounded number of distinct `session_id`s, permanently growing this map
+ * (and, via SessionManager, a session file per id) forever — a memory/disk
+ * DoS. `Map` preserves insertion order, so re-inserting an entry on access
+ * moves it to the "most recently used" end; when over capacity we evict the
+ * "least recently used" (first) entry.
+ *
+ * Eviction tradeoff: dropping a mutex that's still logically in use (a
+ * request for that key is mid-flight) means a *new* request for the same key
+ * arriving after eviction gets a fresh Mutex and briefly loses serialization
+ * against the evicted one. This can only happen if a single session sits
+ * completely untouched for the entire duration its turn takes while
+ * `MAX_TRACKED_SESSIONS` *other* distinct keys arrive — a narrow, low-impact
+ * edge case, and a better outcome than unbounded growth.
+ */
+class MutexRegistry {
+  private readonly mutexes = new Map<string, Mutex>();
+
+  constructor(private readonly maxEntries: number) {}
+
+  get(key: string): Mutex {
+    const existing = this.mutexes.get(key);
+    if (existing) {
+      this.mutexes.delete(key);
+      this.mutexes.set(key, existing); // touch: move to MRU position
+      return existing;
+    }
+
+    const mutex = new Mutex();
+    this.mutexes.set(key, mutex);
+    if (this.mutexes.size > this.maxEntries) {
+      const oldestKey = this.mutexes.keys().next().value;
+      if (oldestKey !== undefined) this.mutexes.delete(oldestKey);
+    }
+    return mutex;
+  }
+
+  get size(): number {
+    return this.mutexes.size;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Response builders
 // ---------------------------------------------------------------------------
@@ -61,7 +118,13 @@ function errorResponse(status: number, message: string, type = "invalid_request_
   return jsonResponse(body, status);
 }
 
-function chatCompletionResponse(content: string, model: string): ChatCompletionResponse {
+function chatCompletionResponse(
+  content: string,
+  model: string,
+  usage: Record<string, number>,
+): ChatCompletionResponse {
+  const promptTokens = usage["prompt_tokens"] ?? 0;
+  const completionTokens = usage["completion_tokens"] ?? 0;
   return {
     id: `chatcmpl-${randomBytes(6).toString("hex")}`,
     object: "chat.completion",
@@ -74,13 +137,35 @@ function chatCompletionResponse(content: string, model: string): ChatCompletionR
         finish_reason: "stop",
       },
     ],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: usage["total_tokens"] ?? promptTokens + completionTokens,
+    },
   };
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Constant-time string comparison for the API key check. A plain `!==`
+ * short-circuits on the first mismatched byte, so response timing leaks
+ * information about how many leading characters of a guessed token are
+ * correct — a real (if slow) attack against a long-lived local secret.
+ */
+function safeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Still run a constant-time comparison so a length mismatch doesn't
+    // return measurably faster than a same-length wrong guess.
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
 
 /** Extract plain text from a ChatMessage content (string or parts array). */
 function extractText(msg: ChatMessage): string {
@@ -102,13 +187,13 @@ async function handleChatCompletions(
   sessions: SessionManager,
   tools: ToolRegistry,
   runSpec: Omit<AgentRunSpec, "initialMessages">,
-  mutexes: Map<string, Mutex>,
+  mutexRegistry: MutexRegistry,
 ): Promise<Response> {
   // Auth
   if (opts.apiKey) {
     const auth = req.headers.get("authorization") ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-    if (token !== opts.apiKey) {
+    if (!safeStringEqual(token, opts.apiKey)) {
       return errorResponse(401, "Invalid API key", "authentication_error");
     }
   }
@@ -148,11 +233,16 @@ async function handleChatCompletions(
   }
 
   // Session routing
+  if (body.session_id !== undefined && !isValidSessionId(body.session_id)) {
+    return errorResponse(
+      400,
+      `session_id must be 1-${SESSION_ID_MAX_LENGTH} characters of letters, digits, '.', '_', ':', or '-'`,
+    );
+  }
   const sessionKey = body.session_id ? `api:${body.session_id}` : DEFAULT_SESSION_KEY;
 
-  // Per-session mutex
-  if (!mutexes.has(sessionKey)) mutexes.set(sessionKey, new Mutex());
-  const mutex = mutexes.get(sessionKey)!;
+  // Per-session mutex (bounded — see MutexRegistry)
+  const mutex = mutexRegistry.get(sessionKey);
   const release = await mutex.acquire();
 
   logger.info({ sessionKey, content: userContent.slice(0, 80) }, "api request");
@@ -168,8 +258,8 @@ async function handleChatCompletions(
     .finally(() => release());
 
   try {
-    const responseText = await withTimeout(turn, opts.timeoutSecs * 1000);
-    return jsonResponse(chatCompletionResponse(responseText, opts.modelName));
+    const { text: responseText, usage } = await withTimeout(turn, opts.timeoutSecs * 1000);
+    return jsonResponse(chatCompletionResponse(responseText, opts.modelName, usage));
   } catch (err) {
     if (err instanceof TimeoutError) {
       return errorResponse(504, `Request timed out after ${opts.timeoutSecs}s`, "timeout_error");
@@ -188,7 +278,7 @@ async function runTurn(
   runSpec: Omit<AgentRunSpec, "initialMessages">,
   modelName: string,
   getSystemPrompt: (() => string) | null | undefined,
-): Promise<string> {
+): Promise<{ text: string; usage: Record<string, number> }> {
   const session = sessions.getOrCreate(sessionKey);
   const history = session.getHistory(0);
 
@@ -203,12 +293,17 @@ async function runTurn(
 
   const result = await runner.run({ ...runSpec, initialMessages: messages });
   let text = result.finalContent?.trim() ?? "";
+  const usage: Record<string, number> = { ...result.usage };
 
   // Retry once on empty
   if (!text) {
     logger.warn({ sessionKey }, "empty response, retrying once");
     const retry = await runner.run({ ...runSpec, initialMessages: messages });
     text = retry.finalContent?.trim() ?? "";
+    // The retry is a real, separate LLM call — fold its cost into the total.
+    for (const [k, v] of Object.entries(retry.usage)) {
+      usage[k] = (usage[k] ?? 0) + v;
+    }
   }
 
   // Persist whatever was actually returned to the caller — including the
@@ -218,9 +313,10 @@ async function runTurn(
   const finalText = text || EMPTY_FINAL_RESPONSE_MESSAGE;
   session.addMessage("user", userContent);
   session.addMessage("assistant", finalText);
+  recordTurnUsage(session, usage, modelName);
   await sessions.save(session);
 
-  return finalText;
+  return { text: finalText, usage };
 }
 
 async function handleModels(opts: ApiServerOpts): Promise<Response> {
@@ -268,7 +364,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 export class ApiServer {
   private _server: ReturnType<typeof Bun.serve> | null = null;
-  private readonly _mutexes = new Map<string, Mutex>();
+  private readonly _mutexRegistry = new MutexRegistry(MAX_TRACKED_SESSIONS);
 
   constructor(
     private readonly _opts: ApiServerOpts,
@@ -285,7 +381,7 @@ export class ApiServer {
     const sessions = this._sessions;
     const tools = this._tools;
     const runSpec = this._runSpec;
-    const mutexes = this._mutexes;
+    const mutexRegistry = this._mutexRegistry;
 
     this._server = Bun.serve({
       hostname: host,
@@ -296,7 +392,7 @@ export class ApiServer {
         const method = req.method.toUpperCase();
 
         if (method === "POST" && path === "/v1/chat/completions") {
-          return handleChatCompletions(req, opts, runner, sessions, tools, runSpec, mutexes);
+          return handleChatCompletions(req, opts, runner, sessions, tools, runSpec, mutexRegistry);
         }
         if (method === "GET" && path === "/v1/models") {
           return handleModels(opts);
@@ -304,17 +400,15 @@ export class ApiServer {
         if (method === "GET" && (path === "/health" || path === "/")) {
           return handleHealth();
         }
-        // OPTIONS pre-flight (basic CORS)
-        if (method === "OPTIONS") {
-          return new Response(null, {
-            status: 204,
-            headers: {
-              "Access-Control-Allow-Origin": "*",
-              "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-              "Access-Control-Allow-Headers": "Content-Type,Authorization",
-            },
-          });
-        }
+        // No CORS support: this API is meant for same-origin/server-side and
+        // CLI clients, not arbitrary browser pages. A `*` preflight response
+        // used to be sent here, but real responses below never carried
+        // Access-Control-Allow-Origin, so it was already non-functional for
+        // actual cross-origin calls. Completing it (adding `*` to every
+        // response) would let any website a user's browser visits reach this
+        // — potentially unauthenticated — local server, so the wildcard was
+        // removed instead of finished. OPTIONS now falls through like any
+        // other unhandled method/path.
         return new Response("Not Found", { status: 404 });
       },
     });

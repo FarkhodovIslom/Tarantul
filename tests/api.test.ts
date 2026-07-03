@@ -436,12 +436,16 @@ describe("Unknown routes", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 204 for OPTIONS pre-flight", async () => {
+  it("does not serve CORS: OPTIONS falls through to 404 with no Access-Control headers", async () => {
+    // The server intentionally supports no cross-origin browser access (see
+    // the comment in ApiServer.start()) — completing CORS with a wildcard
+    // would let any website reach a local, potentially unauthenticated
+    // instance. OPTIONS is treated like any other unhandled method/path.
     server = startServer(makeMockRunner("ok"));
     baseUrl = server.url;
 
     const res = await fetch(`${baseUrl}/v1/chat/completions`, { method: "OPTIONS" });
-    expect(res.status).toBe(204);
-    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 });

@@ -349,9 +349,15 @@ export class OpenAICompatProvider extends LLMProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stream: AsyncIterable<Record<string, unknown>> = await this.client.chat.completions.create({ ...kwargs, stream: true } as any) as any;
 
-      // Accumulate streaming response
+      // Accumulate streaming response.
+      // Tool-call ids are minted fresh below (shortToolId()), same as the
+      // non-streaming parseToolCalls() path — upstream ids are intentionally
+      // not preserved, since provider id formats/lengths vary too widely
+      // (UUIDs, empty strings, etc.) across the 25 OpenAI-compatible specs
+      // this provider supports. So there's nothing to accumulate per-index
+      // here beyond name/args.
       let content = "";
-      const toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
+      const toolCallsMap = new Map<number, { name: string; args: string }>();
       let finishReason = "stop";
       let usage: Record<string, number> = {};
       let reasoningContent = "";
@@ -374,7 +380,7 @@ export class OpenAICompatProvider extends LLMProvider {
               const idx = (tc["index"] as number) ?? 0;
               const fn = (tc["function"] as Record<string, unknown>) ?? {};
               if (!toolCallsMap.has(idx)) {
-                toolCallsMap.set(idx, { id: String(tc["id"] ?? shortToolId()), name: "", args: "" });
+                toolCallsMap.set(idx, { name: "", args: "" });
               }
               const entry = toolCallsMap.get(idx)!;
               if (fn["name"]) entry.name += String(fn["name"]);

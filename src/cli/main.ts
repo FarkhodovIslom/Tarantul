@@ -2,20 +2,25 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import {
-  styled, ansi, printResponse, printProgress,
+  styled, ansi, printResponse, printProgress, printWelcomeBanner,
   StreamRenderer, ToolStatusRenderer, toolStatusLabel,
 } from "./render.js";
 import { Repl, readStdin } from "./repl.js";
-import { loadConfig, setConfigPath } from "../config/loader.js";
+import { runSettingsMenu } from "./settings-menu.js";
+import { loadConfig, setConfigPath, getConfigPath } from "../config/loader.js";
 import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
+import { SettingsController } from "../config/settings.js";
 import { getCliHistoryPath } from "../config/paths.js";
 import { createProvider } from "../providers/factory.js";
 import { SessionManager } from "../session/manager.js";
 import { ToolRegistry } from "../agent/tools/registry.js";
 import { ReadFileTool, WriteFileTool, EditFileTool, ListDirTool } from "../agent/tools/filesystem.js";
 import { ExecTool } from "../agent/tools/shell.js";
+import { WebFetchTool, WebSearchTool } from "../agent/tools/web.js";
+import { connectAllMcpServers, closeAllMcpServers } from "../agent/tools/mcp.js";
 import { AgentRunner } from "../agent/runner.js";
 import { buildMessages, SystemPromptCache } from "../agent/context.js";
+import { recordTurnUsage } from "../agent/usage.js";
 import { CommandRouter, registerBuiltinCommands, buildHelpText } from "../command/index.js";
 import { MemoryStore, MemoryConsolidator } from "../agent/memory.js";
 import { SkillsLoader, BUILTIN_SKILLS_DIR } from "../skills/index.js";
@@ -228,6 +233,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   const host = hostOverride ?? cfg.api.host;
   const port = portOverride ? parseInt(portOverride, 10) : cfg.api.port;
   const timeoutSecs = cfg.api.timeout;
+  const apiKey = cfg.api.apiKey || null;
   const modelName = cfg.agents.defaults.model;
 
   const provider = createProvider(cfg);
@@ -247,6 +253,20 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
       restrictToWorkspace: restrictWs,
     }));
   }
+  if (cfg.tools.web.enable) {
+    tools.register(new WebFetchTool(cfg.tools.web.proxy));
+    if (cfg.tools.web.search.apiKey) {
+      tools.register(new WebSearchTool({
+        provider: cfg.tools.web.search.provider,
+        apiKey: cfg.tools.web.search.apiKey,
+        baseUrl: cfg.tools.web.search.baseUrl || undefined,
+        maxResults: cfg.tools.web.search.maxResults,
+      }));
+    }
+  }
+  // MCP servers — best-effort: a server that fails to connect is skipped
+  // with a warning (see agent/tools/mcp.ts), never fatal to startup.
+  const mcpConnections = await connectAllMcpServers(cfg.tools.mcpServers, tools);
 
   const bus = new MessageBus();
 
@@ -315,7 +335,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
 
   const { startApiServer } = await import("../api/server.js");
   const server = startApiServer(
-    { host, port, timeoutSecs, modelName, getSystemPrompt },
+    { host, port, timeoutSecs, modelName, apiKey, getSystemPrompt },
     runner, sessions, tools, runSpec,
   );
 
@@ -332,6 +352,9 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   }
   if (host === "0.0.0.0" || host === "::") {
     console.log(styled("  Warning: API bound to all interfaces.", ansi.yellow));
+  }
+  if (!apiKey) {
+    console.log(styled("  Warning: No API key configured — anyone who can reach this port can use it. Set api.apiKey in your config.", ansi.yellow));
   }
   console.log();
   console.log(styled("Press Ctrl+C to stop.", ansi.dim));
@@ -350,6 +373,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     cron.stop();
     await channelManager.stopAll();
     await loop!.stop();
+    await closeAllMcpServers(mcpConnections);
     resolveFn();
   };
   await new Promise<void>((resolve) => {
@@ -380,8 +404,10 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   const wsPath = getWorkspacePathFromConfig(cfg);
   if (!existsSync(wsPath)) mkdirSync(wsPath, { recursive: true });
 
-  // Provider
-  const provider = createProvider(cfg);
+  // Provider — reassigned by the /settings menu when the API key or
+  // provider routing changes, so runTurn (which reads it from this closure)
+  // picks up the change on the next turn without a restart.
+  let provider = createProvider(cfg);
 
   // Session manager
   const sessions = new SessionManager(wsPath);
@@ -402,8 +428,22 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       restrictToWorkspace: restrictWs,
     }));
   }
+  if (cfg.tools.web.enable) {
+    tools.register(new WebFetchTool(cfg.tools.web.proxy));
+    if (cfg.tools.web.search.apiKey) {
+      tools.register(new WebSearchTool({
+        provider: cfg.tools.web.search.provider,
+        apiKey: cfg.tools.web.search.apiKey,
+        baseUrl: cfg.tools.web.search.baseUrl || undefined,
+        maxResults: cfg.tools.web.search.maxResults,
+      }));
+    }
+  }
+  // MCP servers — best-effort: a server that fails to connect is skipped
+  // with a warning (see agent/tools/mcp.ts), never fatal to startup.
+  const mcpConnections = await connectAllMcpServers(cfg.tools.mcpServers, tools);
 
-  const runner = new AgentRunner(provider);
+  let runner = new AgentRunner(provider);
 
   // Skills + system prompt cache
   const skillsLoader = new SkillsLoader(wsPath);
@@ -421,6 +461,15 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // Command router for /slash commands
   const router = new CommandRouter();
   registerBuiltinCommands(router);
+
+  // /settings — mutates `cfg` in place and persists to disk; provider changes
+  // rebuild `provider`/`runner` above so runTurn picks them up next turn.
+  const settings = new SettingsController(cfg, getConfigPath(), {
+    onProviderChange: () => {
+      provider = createProvider(cfg);
+      runner = new AgentRunner(provider);
+    },
+  });
 
   // -----------------------------------------------------------------------
   // Run one turn: build messages → run → render response
@@ -474,6 +523,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         : []),
     );
     session.updatedAt = new Date();
+    recordTurnUsage(session, result.usage, cfg.agents.defaults.model);
     await sessions.save(session);
 
     return result.finalContent;
@@ -485,6 +535,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   if (oneShot) {
     const response = await runTurn(oneShot, false);
     if (response) printResponse(response, renderMarkdown);
+    await closeAllMcpServers(mcpConnections);
     return;
   }
 
@@ -497,6 +548,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       const response = await runTurn(input, false);
       if (response) printResponse(response, renderMarkdown);
     }
+    await closeAllMcpServers(mcpConnections);
     return;
   }
 
@@ -507,12 +559,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   const repl = new Repl(historyPath);
   repl.start();
 
-  console.log(
-    `${LOGO} ${styled("tarantul", ansi.cyan)} v${VERSION} — ` +
-      `model: ${styled(cfg.agents.defaults.model, ansi.cyan)}`,
-  );
-  console.log(styled('Type "/help" for commands, "exit" to quit.', ansi.dim));
-  console.log();
+  printWelcomeBanner(VERSION, cfg.agents.defaults.model);
 
   const streaming = process.stdout.isTTY;
 
@@ -528,6 +575,19 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (repl.isExit(trimmed)) break;
+
+    // /settings — owns the input loop directly (needs cfg/provider access
+    // the CommandRouter handlers don't have), so it's special-cased here
+    // rather than routed through the CommandRouter.
+    if (trimmed === "/settings" || trimmed === "/config") {
+      await runSettingsMenu({
+        readLine: (o) => repl.readLine({ history: !o?.secure }),
+        controller: settings,
+        skillsLoader,
+        getSession: () => sessions.getOrCreate(sessionId),
+      });
+      continue;
+    }
 
     // Slash commands
     if (trimmed.startsWith("/")) {
@@ -576,6 +636,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   }
 
   repl.close();
+  await closeAllMcpServers(mcpConnections);
   console.log(styled("Goodbye!", ansi.dim));
 }
 
