@@ -263,14 +263,15 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   }
   if (cfg.tools.web.enable) {
     tools.register(new WebFetchTool(cfg.tools.web.proxy));
-    if (cfg.tools.web.search.apiKey) {
-      tools.register(new WebSearchTool({
-        provider: cfg.tools.web.search.provider,
-        apiKey: cfg.tools.web.search.apiKey,
-        baseUrl: cfg.tools.web.search.baseUrl || undefined,
-        maxResults: cfg.tools.web.search.maxResults,
-      }));
-    }
+    // web_search is always available — the default provider (DuckDuckGo) needs
+    // no API key; keyed providers surface a config hint at call time if unset.
+    tools.register(new WebSearchTool({
+      provider: cfg.tools.web.search.provider,
+      apiKey: cfg.tools.web.search.apiKey || undefined,
+      baseUrl: cfg.tools.web.search.baseUrl || undefined,
+      maxResults: cfg.tools.web.search.maxResults,
+      proxy: cfg.tools.web.proxy,
+    }));
   }
   // Memory tools — long-term memory search/read/write over per-session MEMORY.md
   // + daily logs + linked notes (hybrid keyword + embeddings when a key is present).
@@ -455,14 +456,15 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   }
   if (cfg.tools.web.enable) {
     tools.register(new WebFetchTool(cfg.tools.web.proxy));
-    if (cfg.tools.web.search.apiKey) {
-      tools.register(new WebSearchTool({
-        provider: cfg.tools.web.search.provider,
-        apiKey: cfg.tools.web.search.apiKey,
-        baseUrl: cfg.tools.web.search.baseUrl || undefined,
-        maxResults: cfg.tools.web.search.maxResults,
-      }));
-    }
+    // web_search is always available — the default provider (DuckDuckGo) needs
+    // no API key; keyed providers surface a config hint at call time if unset.
+    tools.register(new WebSearchTool({
+      provider: cfg.tools.web.search.provider,
+      apiKey: cfg.tools.web.search.apiKey || undefined,
+      baseUrl: cfg.tools.web.search.baseUrl || undefined,
+      maxResults: cfg.tools.web.search.maxResults,
+      proxy: cfg.tools.web.proxy,
+    }));
   }
   // Memory tools — same long-term memory suite as the gateway; this REPL is a
   // single session, so we bind it to `sessionId` in runTurn.

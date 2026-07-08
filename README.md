@@ -26,7 +26,7 @@ Tarantul is a Bun-native, zero-framework AI assistant that remembers you across 
 - [Architecture](#architecture)
 - [Docker](#docker)
 - [Development](#development)
-- [Roadmap](#roadmap)
+- [Vision](#vision)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -150,8 +150,8 @@ read_file       — Read files and images (auto-detects PNG/JPEG/GIF/WebP)
 write_file      — Write files with directory auto-creation
 edit_file       — Surgical string-replacement edits
 list_dir        — Directory listing
-web_fetch       — HTTP GET with content extraction
-web_search      — Web search via a configurable backend
+web_fetch       — Fetch a URL and scrape its main content to clean Markdown
+web_search      — Web search — keyless by default (DuckDuckGo); Brave/Tavily/SearXNG optional
 cron            — Schedule one-shot and recurring tasks
 memory_search   — Hybrid keyword + semantic memory recall
 memory_get      — Read a memory file / line range
@@ -298,15 +298,17 @@ bun run format           # biome format --write
 
 ---
 
-## Roadmap
+## Vision
 
-- [ ] Single-binary releases (`bun build --compile`) and npm publish (`npx tarantul`)
-- [ ] CI (tests + typecheck + lint on every PR) with status badges
-- [ ] Demo screencast + `examples/` directory
-- [ ] Memory graph export for external visualization
-- [ ] More channels and provider presets
+Tarantul starts as a personal assistant that remembers — and grows into a private, second brain that thinks alongside you. Where we're headed:
 
-Ideas and requests welcome — open an [issue](https://github.com/FarkhodovIslom/Tarantul/issues).
+- 🕸️ **Interactive memory graph** — a live web view to explore and curate the knowledge graph your assistant builds about your life and work.
+- 🧠 **Proactive recall** — the agent surfaces the right memory on its own, connecting today's conversation to what it learned weeks ago, unprompted.
+- 🔒 **Fully local mode** — run end-to-end offline with local embeddings and a local LLM, so your memory never leaves your machine.
+- 📚 **Personal RAG** — fold your own documents, notes, and files into the same graph the agent already reasons over.
+- 🤖 **Collaborating sub-agents** — specialized agents that share one memory graph and hand off tasks to each other.
+
+Have an idea that fits this direction? [Open an issue](https://github.com/FarkhodovIslom/Tarantul/issues) — let's build it.
 
 ---
 

@@ -8,11 +8,14 @@
  */
 
 import { Tool } from "./base.js";
+import { extractReadable } from "./html.js";
+import { createSearchProvider, type SearchProvider } from "./search-providers.js";
 
 const MAX_FETCH_BYTES = 2_000_000;
 const MAX_OUTPUT_CHARS = 20_000;
 const FETCH_TIMEOUT_MS = 20_000;
-const USER_AGENT = "tarantul/0.1 (+https://github.com/FarkhodovIslom/tarantul)";
+const USER_AGENT =
+  "Mozilla/5.0 (compatible; tarantul/0.1; +https://github.com/FarkhodovIslom/Tarantul)";
 
 /** Bun's fetch() accepts an extra `proxy` field beyond the standard RequestInit. */
 interface BunFetchInit extends RequestInit {
@@ -48,32 +51,7 @@ async function readCapped(response: Response, maxBytes: number): Promise<Buffer>
 function truncate(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
-  return trimmed.slice(0, maxChars) + `\n\n... (truncated, ${trimmed.length - maxChars} more chars)`;
-}
-
-const HTML_ENTITIES: Record<string, string> = {
-  "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
-  "&quot;": '"', "&#39;": "'", "&apos;": "'", "&mdash;": "—", "&ndash;": "–",
-};
-
-/** Minimal HTML -> text extraction: strips scripts/styles/tags, decodes common entities. */
-function htmlToText(html: string): string {
-  let text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(br|p|div|h[1-6]|li|tr)[^>]*>/gi, "\n")
-    .replace(/<[^>]+>/g, " ");
-
-  text = text.replace(/&(nbsp|amp|lt|gt|quot|#39|apos|mdash|ndash);/g, (m) => HTML_ENTITIES[m] ?? m);
-  text = text.replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)));
-
-  return text
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+/g, " ").trim())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return `${trimmed.slice(0, maxChars)}\n\n... (truncated, ${trimmed.length - maxChars} more chars)`;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,13 +62,19 @@ export class WebFetchTool extends Tool {
   override readonly name = "web_fetch";
   override get readOnly(): boolean { return true; }
   override readonly description =
-    "Fetch a URL (http/https) and return its readable text content. " +
-    "Returns native image content for direct image URLs is not supported — text/HTML/JSON only.";
+    "Fetch a URL (http/https) and scrape its main content as readable Markdown " +
+    "(title, headings, links, and lists preserved). Handles HTML, plain text, and " +
+    "JSON. Images and other binary content are not supported.";
 
   readonly parameters = {
     type: "object",
     properties: {
       url: { type: "string", description: "The http(s) URL to fetch" },
+      max_chars: {
+        type: "integer",
+        description: `Max characters to return (default ${MAX_OUTPUT_CHARS}).`,
+        minimum: 500,
+      },
     },
     required: ["url"],
   };
@@ -102,6 +86,10 @@ export class WebFetchTool extends Tool {
   async execute(params: Record<string, unknown>): Promise<string> {
     const raw = String(params["url"] ?? "").trim();
     if (!raw) return "Error: url is required";
+    const maxChars =
+      typeof params["max_chars"] === "number" && params["max_chars"] >= 500
+        ? Math.min(params["max_chars"] as number, MAX_FETCH_BYTES)
+        : MAX_OUTPUT_CHARS;
 
     let parsed: URL;
     try {
@@ -131,16 +119,25 @@ export class WebFetchTool extends Tool {
 
       const contentType = response.headers.get("content-type") ?? "";
       const buf = await readCapped(response, MAX_FETCH_BYTES);
+      const body = buf.toString("utf-8");
 
       if (contentType.includes("application/json")) {
-        return truncate(buf.toString("utf-8"), MAX_OUTPUT_CHARS);
+        return truncate(body, maxChars);
       }
       if (contentType && !contentType.includes("html") && !contentType.includes("text")) {
         return `Error: unsupported content-type '${contentType}' for web_fetch (expected HTML, text, or JSON)`;
       }
 
-      const text = htmlToText(buf.toString("utf-8"));
-      return text ? truncate(text, MAX_OUTPUT_CHARS) : "(no readable text content found at this URL)";
+      // Plain text (non-HTML): return as-is; HTML: scrape to Markdown.
+      if (contentType.includes("text/plain") || !/<[a-z!]/i.test(body.slice(0, 500))) {
+        const plain = body.trim();
+        return plain ? truncate(plain, maxChars) : "(empty response)";
+      }
+
+      const { title, text } = extractReadable(body);
+      if (!text) return "(no readable text content found at this URL)";
+      const doc = title ? `# ${title}\n\n${text}` : text;
+      return truncate(doc, maxChars);
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         return `Error: fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s`;
@@ -158,88 +155,74 @@ export class WebFetchTool extends Tool {
 
 export interface WebSearchOpts {
   provider?: string | undefined;
-  apiKey: string;
+  apiKey?: string | undefined;
   baseUrl?: string | undefined;
   maxResults?: number | undefined;
+  proxy?: string | null | undefined;
 }
-
-const DEFAULT_BRAVE_URL = "https://api.search.brave.com/res/v1/web/search";
 
 export class WebSearchTool extends Tool {
   override readonly name = "web_search";
   override get readOnly(): boolean { return true; }
   override readonly description =
-    "Search the web and return a list of results (title, url, snippet).";
+    "Search the web and return a list of results (title, url, snippet). Works " +
+    "out of the box (DuckDuckGo) with no API key; Brave, Tavily, and SearXNG are " +
+    "also supported via config.";
 
   readonly parameters = {
     type: "object",
     properties: {
       query: { type: "string", description: "The search query" },
+      count: {
+        type: "integer",
+        description: "Number of results to return (1-20).",
+        minimum: 1,
+        maximum: 20,
+      },
     },
     required: ["query"],
   };
 
-  private readonly provider: string;
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
-  private readonly maxResults: number;
+  private readonly search: SearchProvider;
+  private readonly defaultCount: number;
 
   constructor(opts: WebSearchOpts) {
     super();
-    this.provider = (opts.provider || "brave").toLowerCase();
-    this.apiKey = opts.apiKey;
-    this.baseUrl = opts.baseUrl || DEFAULT_BRAVE_URL;
-    this.maxResults = Math.min(Math.max(opts.maxResults ?? 5, 1), 20);
+    this.search = createSearchProvider({
+      provider: opts.provider,
+      apiKey: opts.apiKey,
+      baseUrl: opts.baseUrl,
+      proxy: opts.proxy ?? null,
+    });
+    this.defaultCount = Math.min(Math.max(opts.maxResults ?? 5, 1), 20);
   }
 
   async execute(params: Record<string, unknown>): Promise<string> {
     const query = String(params["query"] ?? "").trim();
     if (!query) return "Error: query is required";
-    if (!this.apiKey) {
-      return "Error: web_search is not configured. Set tools.web.search.apiKey in your config.";
-    }
-    if (this.provider !== "brave") {
-      return `Error: unsupported search provider '${this.provider}' (only 'brave' is currently supported)`;
-    }
+    const count =
+      typeof params["count"] === "number"
+        ? Math.min(Math.max(params["count"] as number, 1), 20)
+        : this.defaultCount;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     try {
-      const url = new URL(this.baseUrl);
-      url.searchParams.set("q", query);
-      url.searchParams.set("count", String(this.maxResults));
-
-      const response = await fetch(url.toString(), {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/json",
-          "User-Agent": USER_AGENT,
-          "X-Subscription-Token": this.apiKey,
-        },
-      });
-
-      if (!response.ok) {
-        return `Error: search failed with status ${response.status} ${response.statusText}`;
-      }
-
-      const data = (await response.json()) as Record<string, unknown>;
-      const web = data["web"] as Record<string, unknown> | undefined;
-      const results = (web?.["results"] as Record<string, unknown>[] | undefined) ?? [];
+      const results = await this.search.search(query, count, controller.signal);
       if (results.length === 0) return `No results found for "${query}"`;
 
-      const lines = results.slice(0, this.maxResults).map((r, i) => {
-        const title = String(r["title"] ?? "(no title)");
-        const link = String(r["url"] ?? "");
-        const desc = String(r["description"] ?? "").replace(/<[^>]+>/g, "");
-        return `${i + 1}. ${title}\n   ${link}\n   ${desc}`;
-      });
-      return lines.join("\n\n");
+      return results
+        .map((r, i) => {
+          const desc = r.description ? `\n   ${r.description}` : "";
+          return `${i + 1}. ${r.title || "(no title)"}\n   ${r.url}${desc}`;
+        })
+        .join("\n\n");
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         return `Error: search timed out after ${FETCH_TIMEOUT_MS / 1000}s`;
       }
-      return `Error searching for "${query}": ${err}`;
+      return `Error searching for "${query}" via ${this.search.id}: ${(err as Error).message}`;
     } finally {
       clearTimeout(timer);
     }

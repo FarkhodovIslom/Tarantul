@@ -145,7 +145,9 @@ export type GatewayConfig = z.infer<typeof GatewayConfigSchema>;
 
 export const WebSearchConfigSchema = withAliases(
   z.object({
-    provider: z.string().default("brave"),
+    // Keyless by default (DuckDuckGo). Also: "searxng" (set baseUrl), "brave"
+    // or "tavily" (set apiKey).
+    provider: z.string().default("duckduckgo"),
     apiKey: z.string().default(""),
     baseUrl: z.string().default(""),
     maxResults: z.number().int().positive().default(5),
