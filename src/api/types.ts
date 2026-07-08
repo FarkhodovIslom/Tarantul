@@ -65,8 +65,11 @@ export interface ApiServerOpts {
   modelName: string;
   /** Optional Bearer token that clients must supply in Authorization header */
   apiKey?: string | null;
-  /** Called before each turn to get the current system prompt (with memory + skills). */
-  getSystemPrompt?: (() => string) | null;
+  /** Called before each turn to get the current system prompt (with memory + skills) for a session key. */
+  getSystemPrompt?: ((key: string) => string) | null;
+  /** Wraps each turn so per-session tools (e.g. memory) bind to this key across
+   * the turn's whole async tree — safe under concurrent sessions. */
+  wrapTurn?: (<T>(key: string, fn: () => Promise<T>) => Promise<T>) | null;
   /** Workspace path (for channel metadata) */
   workspace?: string | null;
 }

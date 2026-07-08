@@ -106,8 +106,8 @@ export class Session implements SessionData {
   }
 
   /**
-   * Retain only the most recent legal suffix of messages.
-   * Mirrors Python `retain_recent_legal_suffix`.
+   * Retain only the most recent legal suffix of messages (drops older turns
+   * while keeping tool-call/result pairs intact).
    */
   retainRecentLegalSuffix(maxMessages: number): void {
     if (maxMessages <= 0) {

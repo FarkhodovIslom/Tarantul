@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-tarantul is a lightweight personal AI assistant framework written in TypeScript on the [Bun](https://bun.sh) runtime. It supports 25+ LLM providers, a tool-execution agent loop, multi-channel chat (Telegram/Slack/Discord), cron scheduling, a skill system, and an OpenAI-compatible HTTP API. It is a port of an earlier Python implementation; the source code frequently references the Python original in comments (`Mirrors tarantul/agent/runner.py`).
+tarantul is a lightweight personal AI assistant framework written in TypeScript on the [Bun](https://bun.sh) runtime. It supports 25+ LLM providers, a tool-execution agent loop, multi-channel chat (Telegram/Slack/Discord), cron scheduling, a skill system, and an OpenAI-compatible HTTP API. Its defining feature is a real long-term memory: per-session MEMORY.md + dated daily logs + atomic, `[[wikilink]]`-connected notes, indexed for hybrid keyword + semantic search and auto-consolidated into a knowledge graph the agent builds and traverses itself (`src/agent/memory*.ts`). It is Bun-native and zero-framework by design.
 
 ## Commands
 
@@ -54,7 +54,7 @@ Key subsystems:
 
 ## Performance-sensitive code
 
-The agent core is deliberately RAM-optimized relative to the Python original; preserve these patterns when editing `src/agent/`:
+The agent core is deliberately RAM-optimized; preserve these patterns when editing `src/agent/`:
 
 - `MessageBuffer` windows context with a `windowStart` pointer — **never clone the message list**. `toProviderView()` is the only per-call shallow copy.
 - `applyToolResultBudget()` / `enforceContextBudget()` mutate or shift in place.

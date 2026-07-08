@@ -751,55 +751,83 @@ describe("SystemPromptCache", () => {
 
   it("builds a non-empty system prompt", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("", "", "");
+    const prompt = cache.get("cli:direct","", "", "");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
   });
 
   it("includes memory content when provided", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("## My memory content", "", "");
+    const prompt = cache.get("cli:direct","## My memory content", "", "");
     expect(prompt).toContain("My memory content");
   });
 
   it("includes skills summary when provided", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("", "<skills><skill>test</skill></skills>", "");
+    const prompt = cache.get("cli:direct","", "<skills><skill>test</skill></skills>", "");
     expect(prompt).toContain("<skills>");
   });
 
   it("includes always-skills content when provided", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("", "", "### Skill: memory\n\nMemory instructions here.");
+    const prompt = cache.get("cli:direct","", "", "### Skill: memory\n\nMemory instructions here.");
     expect(prompt).toContain("Memory instructions");
   });
 
   it("returns same string on second call (cache hit)", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("memory", "skills", "always");
-    const second = cache.get("memory", "skills", "always");
+    const first = cache.get("cli:direct","memory", "skills", "always");
+    const second = cache.get("cli:direct","memory", "skills", "always");
     expect(first).toBe(second); // identical object reference — cache hit
+  });
+
+  it("tags memory as reference context, not standing instructions", () => {
+    const cache = new SystemPromptCache(wsDir);
+    const prompt = cache.get("cli:direct", "## recalled fact", "", "");
+    expect(prompt).toContain("NOT");
+    expect(prompt).toContain("standing instructions");
+    expect(prompt).toContain("recalled fact");
+  });
+
+  it("keeps per-session memory isolated across cache keys", () => {
+    const cache = new SystemPromptCache(wsDir);
+    const a = cache.get("telegram:1", "chat A memory", "", "");
+    const b = cache.get("slack:2", "chat B memory", "", "");
+    expect(a).toContain("chat A memory");
+    expect(a).not.toContain("chat B memory");
+    expect(b).toContain("chat B memory");
+    expect(b).not.toContain("chat A memory");
+    // The first key's entry survives the second key's insertion (cache hit).
+    expect(cache.get("telegram:1", "chat A memory", "", "")).toBe(a);
+  });
+
+  it("rebuilds when always-skills content changes", () => {
+    const cache = new SystemPromptCache(wsDir);
+    const first = cache.get("cli:direct", "", "", "### Skill: x\n\nv1");
+    const second = cache.get("cli:direct", "", "", "### Skill: x\n\nv2");
+    expect(first).not.toBe(second);
+    expect(second).toContain("v2");
   });
 
   it("rebuilds when memory content changes", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("memory v1", "", "");
-    const second = cache.get("memory v2", "", "");
+    const first = cache.get("cli:direct","memory v1", "", "");
+    const second = cache.get("cli:direct","memory v2", "", "");
     expect(first).not.toBe(second);
   });
 
   it("rebuilds when skills summary changes", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("", "skills v1", "");
-    const second = cache.get("", "skills v2", "");
+    const first = cache.get("cli:direct","", "skills v1", "");
+    const second = cache.get("cli:direct","", "skills v2", "");
     expect(first).not.toBe(second);
   });
 
   it("invalidate clears cached entry", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("mem", "skills", "");
+    const first = cache.get("cli:direct","mem", "skills", "");
     cache.invalidate();
-    const second = cache.get("mem", "skills", "");
+    const second = cache.get("cli:direct","mem", "skills", "");
     // After invalidation + same inputs, a new string is built (not the old ref)
     expect(first).toEqual(second); // same content
   });
@@ -807,7 +835,7 @@ describe("SystemPromptCache", () => {
   it("includes bootstrap file content when file exists", () => {
     writeFileSync(join(wsDir, "AGENTS.md"), "# Custom agents instructions");
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("", "", "");
+    const prompt = cache.get("cli:direct","", "", "");
     expect(prompt).toContain("Custom agents instructions");
   });
 
@@ -815,12 +843,12 @@ describe("SystemPromptCache", () => {
     const filePath = join(wsDir, "AGENTS.md");
     writeFileSync(filePath, "version 1");
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("", "", "");
+    const first = cache.get("cli:direct","", "", "");
     // Wait briefly then update the file
     await new Promise((r) => setTimeout(r, 10));
     writeFileSync(filePath, "version 2");
     // Touch mtime by reading stat
-    const second = cache.get("", "", "");
+    const second = cache.get("cli:direct","", "", "");
     // Content changed so prompt should differ
     expect(second).toContain("version 2");
   });

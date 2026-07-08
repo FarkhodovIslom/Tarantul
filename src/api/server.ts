@@ -251,9 +251,11 @@ async function handleChatCompletions(
   // release the session mutex until it actually settles — otherwise a timed-out
   // turn keeps mutating session state while the next request runs concurrently,
   // defeating the per-session serialization the mutex exists to provide.
-  const turn = runTurn(
-    userContent, sessionKey, runner, sessions, tools, runSpec, opts.modelName, opts.getSystemPrompt,
-  );
+  const runOnce = () =>
+    runTurn(
+      userContent, sessionKey, runner, sessions, tools, runSpec, opts.modelName, opts.getSystemPrompt,
+    );
+  const turn = opts.wrapTurn ? opts.wrapTurn(sessionKey, runOnce) : runOnce();
   turn.catch(() => { /* surfaced below / on the timeout path */ })
     .finally(() => release());
 
@@ -277,12 +279,12 @@ async function runTurn(
   tools: ToolRegistry,
   runSpec: Omit<AgentRunSpec, "initialMessages">,
   modelName: string,
-  getSystemPrompt: (() => string) | null | undefined,
+  getSystemPrompt: ((key: string) => string) | null | undefined,
 ): Promise<{ text: string; usage: Record<string, number> }> {
   const session = sessions.getOrCreate(sessionKey);
   const history = session.getHistory(0);
 
-  const systemPrompt = getSystemPrompt?.() ?? "You are a helpful AI assistant.";
+  const systemPrompt = getSystemPrompt?.(sessionKey) ?? "You are a helpful AI assistant.";
   const messages = buildMessages({
     history,
     currentMessage: userContent,

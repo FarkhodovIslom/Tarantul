@@ -224,7 +224,7 @@ export class SkillsLoader {
       const data = JSON.parse(raw) as unknown;
       if (typeof data !== "object" || data === null) return {};
       const obj = data as Record<string, unknown>;
-      const nb = obj["tarantul"] ?? obj["nanobot"] ?? obj["openclaw"];
+      const nb = obj["tarantul"] ?? obj["nanobot"];
       if (typeof nb === "object" && nb !== null) return nb as TarantulSkillMeta;
       return {};
     } catch {

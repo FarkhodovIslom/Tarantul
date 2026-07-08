@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { CronService } from "../src/cron/service.js";
 import { CronTool } from "../src/agent/tools/cron.js";
 import { computeNextRun, nowMs, validateTimezone } from "../src/cron/types.js";
-import { MemoryStore } from "../src/agent/memory.js";
+import { MemoryStore, MemoryStoreRegistry, MemoryConsolidator } from "../src/agent/memory.js";
+import { SessionManager } from "../src/session/manager.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -376,10 +377,139 @@ describe("MemoryStore", () => {
     );
     expect(ok).toBe(true);
 
-    const history = readFileSync(join(tmpDir, "memory", "HISTORY.md"), "utf-8");
+    // Consolidation routes the history entry to today's daily log (OpenClaw-style).
+    const history = readFileSync(store.dailyLogPath(), "utf-8");
     expect(history).toContain("test message");
 
     const memory = store.readLongTerm();
     expect(memory).toContain("consolidation");
+  });
+
+  it("consolidate writes atomic notes with wikilinks", async () => {
+    const store = new MemoryStore(tmpDir);
+    const mockProvider = {
+      generation: { temperature: 0.7, maxTokens: 4096, reasoningEffort: null },
+      getDefaultModel: () => "mock",
+      chatWithRetry: async () => ({
+        content: null,
+        toolCalls: [
+          {
+            id: "tc1",
+            name: "save_memory",
+            arguments: {
+              history_entry: "[2025-01-01 10:00] Discussed the rocket program.",
+              memory_update: "# Memory\nActive project: [[Apollo]] led by [[Alice]].",
+              notes: [
+                { name: "Apollo", content: "Flagship rocket program. Led by [[Alice]]." },
+                { name: "Alice", content: "Lead engineer on [[Apollo]].", mode: "replace" },
+              ],
+            },
+          },
+        ],
+        finishReason: "tool_calls",
+        usage: {},
+      }),
+    };
+
+    const ok = await store.consolidate(
+      [{ role: "user", content: "tell me about apollo", timestamp: "2025-01-01T10:00:00" }],
+      mockProvider as never,
+      "mock",
+    );
+    expect(ok).toBe(true);
+
+    // Atomic notes are written under notes/ with their wikilinks intact.
+    expect(store.readNote("Apollo")).toContain("Flagship rocket program");
+    expect(store.readNote("Apollo")).toContain("[[Alice]]");
+    expect(store.readNote("Alice")).toContain("[[Apollo]]");
+    expect(store.listNoteNames().sort()).toEqual(["Alice", "Apollo"]);
+    // The curated index references the notes.
+    expect(store.readLongTerm()).toContain("[[Apollo]]");
+  });
+
+  it("fires onConsolidated (reindex hook) once after writing memory", async () => {
+    const sessions = new SessionManager(tmpDir);
+    const session = sessions.getOrCreate("cli:direct");
+    for (let i = 0; i < 3; i++) {
+      session.addMessage("user", `question ${i} about apollo`);
+      session.addMessage("assistant", `answer ${i}`);
+    }
+
+    const mockProvider = {
+      generation: { temperature: 0.7, maxTokens: 4096, reasoningEffort: null },
+      getDefaultModel: () => "mock",
+      chatWithRetry: async () => ({
+        content: null,
+        finishReason: "tool_calls",
+        usage: {},
+        toolCalls: [
+          {
+            id: "t1",
+            name: "save_memory",
+            arguments: {
+              history_entry: "[2026-07-08 10:00] Discussed Apollo.",
+              memory_update: "# Memory\n[[Apollo]] is active.",
+              notes: [{ name: "Apollo", content: "Rocket program." }],
+            },
+          },
+        ],
+      }),
+    };
+
+    const reindexed: string[] = [];
+    const consolidator = new MemoryConsolidator({
+      workspace: tmpDir,
+      provider: mockProvider as never,
+      model: "mock",
+      sessions,
+      // budget = 1025 - 0 - 1024 = 1 → any non-empty session exceeds it.
+      contextWindowTokens: 1025,
+      maxCompletionTokens: 0,
+      buildMessages: (o) => o.history,
+      getToolDefinitions: () => [],
+      onConsolidated: (key) => {
+        reindexed.push(key);
+      },
+    });
+
+    await consolidator.maybeConsolidateByTokens(session);
+
+    // The hook fired exactly once, for this session, after notes were written.
+    expect(reindexed).toEqual(["cli:direct"]);
+    expect(consolidator.stores.for("cli:direct").readNote("Apollo")).toContain("Rocket program");
+  });
+
+  it("scopes memory per session key (no cross-chat leakage)", () => {
+    const a = new MemoryStore(tmpDir, "telegram:111");
+    const b = new MemoryStore(tmpDir, "slack:222");
+    a.writeLongTerm("chat A secret");
+    b.writeLongTerm("chat B secret");
+    // Each key sees only its own memory.
+    expect(a.readLongTerm()).toContain("chat A secret");
+    expect(a.readLongTerm()).not.toContain("chat B secret");
+    expect(b.readLongTerm()).toContain("chat B secret");
+    expect(b.readLongTerm()).not.toContain("chat A secret");
+    // A keyed store must not read the global store's file, and vice versa.
+    const global = new MemoryStore(tmpDir);
+    expect(global.readLongTerm()).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MemoryStoreRegistry
+// ---------------------------------------------------------------------------
+
+describe("MemoryStoreRegistry", () => {
+  it("returns the same store instance for the same key", () => {
+    const reg = new MemoryStoreRegistry(tmpDir);
+    expect(reg.for("telegram:1")).toBe(reg.for("telegram:1"));
+  });
+
+  it("isolates memory between distinct keys", () => {
+    const reg = new MemoryStoreRegistry(tmpDir);
+    reg.for("a:1").writeLongTerm("A");
+    reg.for("b:2").writeLongTerm("B");
+    expect(reg.for("a:1").readLongTerm()).toBe("A");
+    expect(reg.for("b:2").readLongTerm()).toBe("B");
   });
 });

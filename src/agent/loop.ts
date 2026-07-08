@@ -15,10 +15,12 @@ export interface AgentLoopOpts {
   runner: AgentRunner;
   sessions: SessionManager;
   runSpec: Omit<AgentRunSpec, "initialMessages">;
-  getSystemPrompt: () => string;
+  getSystemPrompt: (key: string) => string;
   timezone?: string | null;
   /** Registered CronTool, so its routing context can be set per turn. */
   cronTool?: CronTool | null;
+  /** Memory tools backing service, so the active session is set per turn. */
+  memoryService?: { setSessionKey(key: string): void } | null;
   /** Optional memory consolidator run after each turn. */
   consolidator?: MemoryConsolidator | null;
   /** Publish interim progress messages (gated further by channel config). */
@@ -41,9 +43,10 @@ export class AgentLoop {
   private readonly runner: AgentRunner;
   private readonly sessions: SessionManager;
   private readonly runSpec: Omit<AgentRunSpec, "initialMessages">;
-  private readonly getSystemPrompt: () => string;
+  private readonly getSystemPrompt: (key: string) => string;
   private readonly timezone: string | null;
   private readonly cronTool: CronTool | null;
+  private readonly memoryService: { setSessionKey(key: string): void } | null;
   private readonly consolidator: MemoryConsolidator | null;
   private readonly sendProgress: boolean;
 
@@ -60,6 +63,7 @@ export class AgentLoop {
     this.getSystemPrompt = opts.getSystemPrompt;
     this.timezone = opts.timezone ?? null;
     this.cronTool = opts.cronTool ?? null;
+    this.memoryService = opts.memoryService ?? null;
     this.consolidator = opts.consolidator ?? null;
     this.sendProgress = opts.sendProgress ?? false;
   }
@@ -134,13 +138,16 @@ export class AgentLoop {
   // ---------------------------------------------------------------------------
 
   private async _runTurn(spec: TurnSpec): Promise<string | null> {
+    // Point the memory tools at this session before the model can call them.
+    this.memoryService?.setSessionKey(spec.key);
+
     const session = this.sessions.getOrCreate(spec.key);
     const history = session.getHistory(0);
 
     const messages = buildMessages({
       history,
       currentMessage: spec.userMessage,
-      systemPrompt: this.getSystemPrompt(),
+      systemPrompt: this.getSystemPrompt(spec.key),
       media: spec.media ?? null,
       channel: spec.channel,
       chatId: spec.chatId,

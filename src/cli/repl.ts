@@ -59,7 +59,10 @@ export class Repl {
 
   start(): void {
     this.history = this.historyPath ? new CliHistory(this.historyPath) : null;
+    this.createInterface();
+  }
 
+  private createInterface(): void {
     this.rl = createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -76,11 +79,23 @@ export class Repl {
   }
 
   /**
-   * Read one line from the user. Returns null on EOF (Ctrl-D). Pass
-   * `{ history: false }` for sensitive input (e.g. API keys) so it never
-   * touches the on-disk CLI history file.
+   * Relinquish stdin so a raw-keypress consumer (the `/settings` menu) can
+   * take exclusive control of it. A live `readline.Interface` decodes
+   * keypresses itself even while "paused", so it must be fully closed
+   * rather than paused — {@link restore} recreates it afterward.
    */
-  readLine(opts?: { history?: boolean }): Promise<string | null> {
+  suspend(): void {
+    this.rl?.close();
+    this.rl = null;
+  }
+
+  /** Recreate the readline interface after {@link suspend}, e.g. once a raw-keypress consumer is done. */
+  restore(): void {
+    this.createInterface();
+  }
+
+  /** Read one line from the user. Returns null on EOF (Ctrl-D). */
+  readLine(): Promise<string | null> {
     return new Promise((resolve) => {
       if (!this.rl) {
         resolve(null);
@@ -90,7 +105,7 @@ export class Repl {
       const prompt = styled("You: ", ansi.bold + ansi.blue);
       this.rl.question(prompt, (answer) => {
         const line = answer ?? "";
-        if (this.history && opts?.history !== false) this.history.push(line);
+        if (this.history) this.history.push(line);
         resolve(line);
       });
 

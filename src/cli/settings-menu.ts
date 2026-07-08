@@ -1,13 +1,23 @@
 
 /**
- * Interactive `/settings` menu for the REPL. Owns the input loop (via the
- * injected `readLine`) for the duration of the menu — no agent turn runs
- * while it's active, so there's no race with session writes. Every mutation
- * goes through {@link SettingsController}, which persists to disk and
- * mutates the live `Config` in place.
+ * Interactive `/settings` menu for the REPL: arrow keys to move, Enter to
+ * select, Esc to go back/cancel. Owns stdin for its entire run (the caller
+ * must `Repl.suspend()` first and `Repl.restore()` after — see
+ * `keyboard.ts` for why a live `readline.Interface` can't coexist with raw
+ * keypress reads) — no agent turn runs while it's active, so there's no
+ * race with session writes. Every mutation goes through
+ * {@link SettingsController}, which persists to disk and mutates the live
+ * `Config` in place.
  */
 
 import { styled, ansi } from "./render.js";
+import {
+  beginKeyboardSession,
+  endKeyboardSession,
+  selectMenu,
+  promptText,
+  type KeyboardIO,
+} from "./keyboard.js";
 import {
   type SettingsController,
   type SettingsResult,
@@ -21,17 +31,14 @@ import { getSessionUsage, formatUsageSummary } from "../agent/usage.js";
 // Types
 // ---------------------------------------------------------------------------
 
-/** Pass `{ secure: true }` for input that must not be written to CLI history (API keys). */
-export type MenuReadLine = (opts?: { secure?: boolean }) => Promise<string | null>;
-
 export interface SettingsMenuOptions {
-  readLine: MenuReadLine;
   controller: SettingsController;
   skillsLoader: SkillsLoader;
   getSession: () => Session;
+  /** Injectable for tests; defaults to process.stdin/stdout. */
+  io?: KeyboardIO;
 }
 
-const BACK_COMMANDS = new Set(["0", "q", "back", "exit"]);
 const REASONING_CHOICES = ["low", "medium", "high", "none"] as const;
 
 // ---------------------------------------------------------------------------
@@ -39,69 +46,72 @@ const REASONING_CHOICES = ["low", "medium", "high", "none"] as const;
 // ---------------------------------------------------------------------------
 
 export async function runSettingsMenu(opts: SettingsMenuOptions): Promise<void> {
-  const { readLine, controller } = opts;
+  beginKeyboardSession();
+  try {
+    await menuLoop(opts);
+  } finally {
+    endKeyboardSession();
+  }
+}
+
+async function menuLoop(opts: SettingsMenuOptions): Promise<void> {
+  const { controller } = opts;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    printTopMenu(controller);
-    const raw = await readLine();
-    if (raw === null) return; // EOF (Ctrl-D)
-    const choice = raw.trim();
-    if (choice === "") continue;
-    if (BACK_COMMANDS.has(choice.toLowerCase())) return;
+    const o = controller.overview();
+    const choice = await selectMenu(
+      [
+        { label: "Model", hint: o.model },
+        { label: "Provider / API keys", hint: `${o.resolvedProvider ?? "none"} · key ${o.keyMasked}` },
+        {
+          label: "Generation",
+          hint: `temp ${o.temperature} · max ${o.maxTokens} · ctx ${o.contextWindowTokens}`,
+        },
+        { label: "Skills" },
+        { label: "Usage" },
+        { label: "Advanced (raw get/set)" },
+        { label: "Back to chat" },
+      ],
+      { io: opts.io },
+    );
+
+    if (choice === null || choice === 6) return; // Esc, or "Back to chat"
 
     switch (choice) {
-      case "1":
+      case 0:
         await modelMenu(opts);
         break;
-      case "2":
+      case 1:
         await providerMenu(opts);
         break;
-      case "3":
+      case 2:
         await generationMenu(opts);
         break;
-      case "4":
-        skillsMenu(opts);
+      case 3:
+        skillsView(opts);
         break;
-      case "5":
+      case 4:
         usageView(opts);
         break;
-      case "6":
+      case 5:
         await advancedMenu(opts);
         break;
-      default:
-        console.log(styled("Unknown option.", ansi.yellow));
     }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Top menu
-// ---------------------------------------------------------------------------
-
-function printTopMenu(controller: SettingsController): void {
-  const o = controller.overview();
-  console.log();
-  console.log(styled("Settings", ansi.bold, ansi.cyan));
-  console.log(` ${styled("1)", ansi.cyan)} Model                (${o.model})`);
-  console.log(
-    ` ${styled("2)", ansi.cyan)} Provider / API keys  (${o.resolvedProvider ?? "none"} · key ${o.keyMasked})`,
+function printResult(io: KeyboardIO | undefined, result: SettingsResult, successMsg: string): void {
+  const out = io?.output ?? process.stdout;
+  out.write(
+    result.ok
+      ? `${styled(`✓ ${successMsg}`, ansi.green)}\n`
+      : `${styled(`✗ ${result.error}`, ansi.red)}\n`,
   );
-  console.log(
-    ` ${styled("3)", ansi.cyan)} Generation           (temp ${o.temperature} · max ${o.maxTokens} · ctx ${o.contextWindowTokens})`,
-  );
-  console.log(` ${styled("4)", ansi.cyan)} Skills`);
-  console.log(` ${styled("5)", ansi.cyan)} Usage`);
-  console.log(` ${styled("6)", ansi.cyan)} Advanced (raw get/set)`);
-  console.log(` ${styled("0)", ansi.cyan)} Back to chat`);
 }
 
-function printResult(result: SettingsResult, successMsg: string): void {
-  if (result.ok) {
-    console.log(styled(`✓ ${successMsg}`, ansi.green));
-  } else {
-    console.log(styled(`✗ ${result.error}`, ansi.red));
-  }
+function log(io: KeyboardIO | undefined, text: string): void {
+  (io?.output ?? process.stdout).write(`${text}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -109,66 +119,65 @@ function printResult(result: SettingsResult, successMsg: string): void {
 // ---------------------------------------------------------------------------
 
 async function modelMenu(opts: SettingsMenuOptions): Promise<void> {
-  const { readLine, controller } = opts;
-  console.log();
-  console.log(styled("Model", ansi.bold));
-  console.log(`Current: ${controller.overview().model}`);
-  console.log(styled("Enter a new model id (blank to cancel):", ansi.dim));
+  const { controller, io } = opts;
+  log(io, `\n${styled("Model", ansi.bold)}`);
+  log(io, `Current: ${controller.overview().model}`);
+  const input = await promptText("Enter a new model id (Esc to cancel):", { io });
+  if (input === null) return;
+  const trimmed = input.trim();
+  if (!trimmed) return;
 
-  const input = (await readLine())?.trim();
-  if (!input) return;
-
-  const result = controller.setModel(input);
-  printResult(result, `Model set to ${input}.`);
+  printResult(io, controller.setModel(trimmed), `Model set to ${trimmed}.`);
 }
 
 // ---------------------------------------------------------------------------
 // Provider / API keys
 // ---------------------------------------------------------------------------
 
-function printProviderList(list: ProviderListEntry[]): void {
-  list.forEach((p, i) => {
-    const badges = [p.isOauth ? "oauth" : null, p.isLocal ? "local" : null].filter(Boolean);
-    const badgeStr = badges.length ? ` [${badges.join(", ")}]` : "";
-    const keyStatus = p.hasKey ? styled("key set", ansi.green) : styled("no key", ansi.dim);
-    console.log(`  ${String(i + 1).padStart(2)}) ${p.label.padEnd(24)} ${keyStatus}${badgeStr}`);
-  });
+function providerOptionLabel(p: ProviderListEntry): { label: string; hint: string } {
+  const badges = [p.isOauth ? "oauth" : null, p.isLocal ? "local" : null].filter(Boolean);
+  const badgeStr = badges.length ? ` [${badges.join(", ")}]` : "";
+  return { label: p.label, hint: `${p.hasKey ? "key set" : "no key"}${badgeStr}` };
 }
 
 async function providerMenu(opts: SettingsMenuOptions): Promise<void> {
-  const { readLine, controller } = opts;
-  const list = controller.providerList();
+  const { controller, io } = opts;
   const o = controller.overview();
 
-  console.log();
-  console.log(styled("Provider / API keys", ansi.bold));
-  console.log(`Routing: ${o.provider} ${o.provider === "auto" ? `(resolved: ${o.resolvedProvider ?? "none"})` : ""}`);
-  printProviderList(list);
-  console.log(
-    styled(
-      "Enter a number to set that provider's API key, or type 'auto' / a provider name to force routing (blank to cancel):",
-      ansi.dim,
-    ),
+  log(io, `\n${styled("Provider / API keys", ansi.bold)}`);
+  log(io, `Routing: ${o.provider}${o.provider === "auto" ? ` (resolved: ${o.resolvedProvider ?? "none"})` : ""}`);
+
+  const action = await selectMenu(
+    [
+      { label: "Set an API key" },
+      { label: "Set provider routing (auto / provider name)" },
+      { label: "Back" },
+    ],
+    { io },
   );
+  if (action === null || action === 2) return;
 
-  const raw = (await readLine())?.trim();
-  if (!raw) return;
+  if (action === 0) {
+    const list = controller.providerList();
+    const idx = await selectMenu(list.map(providerOptionLabel), { io });
+    if (idx === null) return;
+    const entry = list[idx]!;
 
-  if (/^\d+$/.test(raw)) {
-    const idx = Number(raw) - 1;
-    const entry = list[idx];
-    if (!entry) {
-      console.log(styled(`✗ No provider at index ${raw}.`, ansi.red));
-      return;
-    }
-    console.log(styled(`Enter API key for ${entry.label} (input is not saved to CLI history):`, ansi.dim));
-    const key = (await readLine({ secure: true }))?.trim();
-    if (!key) return;
-    printResult(controller.setApiKey(entry.name, key), `API key set for ${entry.label}.`);
+    log(io, `Enter API key for ${entry.label} (input is masked, not saved to CLI history):`);
+    const key = await promptText("(Esc to cancel)", { io, secure: true });
+    if (key === null) return;
+    const trimmed = key.trim();
+    if (!trimmed) return;
+    printResult(io, controller.setApiKey(entry.name, trimmed), `API key set for ${entry.label}.`);
     return;
   }
 
-  printResult(controller.setProvider(raw), `Provider routing set to ${raw}.`);
+  // action === 1: force routing
+  const raw = await promptText("Enter 'auto' or a provider name (Esc to cancel):", { io });
+  if (raw === null) return;
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  printResult(io, controller.setProvider(trimmed), `Provider routing set to ${trimmed}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -176,62 +185,66 @@ async function providerMenu(opts: SettingsMenuOptions): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function generationMenu(opts: SettingsMenuOptions): Promise<void> {
-  const { readLine, controller } = opts;
+  const { controller, io } = opts;
   const o = controller.overview();
 
-  console.log();
-  console.log(styled("Generation", ansi.bold));
-  console.log(` 1) Temperature         (${o.temperature})`);
-  console.log(` 2) Max tokens          (${o.maxTokens})`);
-  console.log(` 3) Context window      (${o.contextWindowTokens})`);
-  console.log(` 4) Max tool iterations (${o.maxToolIterations})`);
-  console.log(` 5) Reasoning effort    (${o.reasoningEffort ?? "none"})`);
-  console.log(` 0) Back`);
-
-  const choice = (await readLine())?.trim();
-  if (!choice || BACK_COMMANDS.has(choice.toLowerCase())) return;
+  log(io, `\n${styled("Generation", ansi.bold)}`);
+  const choice = await selectMenu(
+    [
+      { label: "Temperature", hint: String(o.temperature) },
+      { label: "Max tokens", hint: String(o.maxTokens) },
+      { label: "Context window", hint: String(o.contextWindowTokens) },
+      { label: "Max tool iterations", hint: String(o.maxToolIterations) },
+      { label: "Reasoning effort", hint: o.reasoningEffort ?? "none" },
+      { label: "Back" },
+    ],
+    { io },
+  );
+  if (choice === null || choice === 5) return;
 
   switch (choice) {
-    case "1": {
-      const n = await promptNumber(readLine, "Enter temperature (0-2):");
-      if (n !== null) printResult(controller.setTemperature(n), `Temperature set to ${n}.`);
+    case 0: {
+      const n = await promptNumber(opts, "Enter temperature (0-2):");
+      if (n !== null) printResult(io, controller.setTemperature(n), `Temperature set to ${n}.`);
       break;
     }
-    case "2": {
-      const n = await promptNumber(readLine, "Enter max tokens:");
-      if (n !== null) printResult(controller.setMaxTokens(n), `Max tokens set to ${n}.`);
+    case 1: {
+      const n = await promptNumber(opts, "Enter max tokens:");
+      if (n !== null) printResult(io, controller.setMaxTokens(n), `Max tokens set to ${n}.`);
       break;
     }
-    case "3": {
-      const n = await promptNumber(readLine, "Enter context window tokens:");
-      if (n !== null) printResult(controller.setContextWindow(n), `Context window set to ${n}.`);
+    case 2: {
+      const n = await promptNumber(opts, "Enter context window tokens:");
+      if (n !== null) printResult(io, controller.setContextWindow(n), `Context window set to ${n}.`);
       break;
     }
-    case "4": {
-      const n = await promptNumber(readLine, "Enter max tool iterations:");
-      if (n !== null) printResult(controller.setMaxToolIterations(n), `Max tool iterations set to ${n}.`);
+    case 3: {
+      const n = await promptNumber(opts, "Enter max tool iterations:");
+      if (n !== null) printResult(io, controller.setMaxToolIterations(n), `Max tool iterations set to ${n}.`);
       break;
     }
-    case "5": {
-      console.log(styled(`Enter reasoning effort (${REASONING_CHOICES.join("/")}):`, ansi.dim));
-      const raw = (await readLine())?.trim().toLowerCase();
-      if (!raw) return;
-      const v = raw === "none" ? null : (raw as "low" | "medium" | "high");
-      printResult(controller.setReasoningEffort(v), `Reasoning effort set to ${v ?? "none"}.`);
+    case 4: {
+      const idx = await selectMenu(
+        REASONING_CHOICES.map((c) => ({ label: c })),
+        { io },
+      );
+      if (idx === null) return;
+      const raw = REASONING_CHOICES[idx]!;
+      const v = raw === "none" ? null : raw;
+      printResult(io, controller.setReasoningEffort(v), `Reasoning effort set to ${v ?? "none"}.`);
       break;
     }
-    default:
-      console.log(styled("Unknown option.", ansi.yellow));
   }
 }
 
-async function promptNumber(readLine: MenuReadLine, prompt: string): Promise<number | null> {
-  console.log(styled(prompt, ansi.dim));
-  const raw = (await readLine())?.trim();
-  if (!raw) return null;
-  const n = Number(raw);
+async function promptNumber(opts: SettingsMenuOptions, prompt: string): Promise<number | null> {
+  const raw = await promptText(prompt, { io: opts.io });
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
   if (Number.isNaN(n)) {
-    console.log(styled(`✗ Not a number: ${raw}`, ansi.red));
+    log(opts.io, styled(`✗ Not a number: ${trimmed}`, ansi.red));
     return null;
   }
   return n;
@@ -241,25 +254,23 @@ async function promptNumber(readLine: MenuReadLine, prompt: string): Promise<num
 // Skills (read-only)
 // ---------------------------------------------------------------------------
 
-function skillsMenu(opts: SettingsMenuOptions): void {
-  const { skillsLoader } = opts;
+function skillsView(opts: SettingsMenuOptions): void {
+  const { skillsLoader, io } = opts;
   const all = skillsLoader.listSkills(false);
   const available = new Set(skillsLoader.listSkills(true).map((s) => s.name));
   const always = new Set(skillsLoader.getAlwaysSkills());
 
-  console.log();
-  console.log(styled("Skills", ansi.bold));
+  log(io, `\n${styled("Skills", ansi.bold)}`);
   if (all.length === 0) {
-    console.log(styled("  (none found)", ansi.dim));
+    log(io, styled("  (none found)", ansi.dim));
     return;
   }
   for (const s of all) {
-    const flags = [
-      available.has(s.name) ? null : "unavailable",
-      always.has(s.name) ? "always" : null,
-    ].filter(Boolean);
+    const flags = [available.has(s.name) ? null : "unavailable", always.has(s.name) ? "always" : null].filter(
+      Boolean,
+    );
     const flagStr = flags.length ? ` [${flags.join(", ")}]` : "";
-    console.log(`  ${s.name.padEnd(24)} ${s.source}${flagStr}`);
+    log(io, `  ${s.name.padEnd(24)} ${s.source}${flagStr}`);
   }
 }
 
@@ -268,9 +279,8 @@ function skillsMenu(opts: SettingsMenuOptions): void {
 // ---------------------------------------------------------------------------
 
 function usageView(opts: SettingsMenuOptions): void {
-  console.log();
-  console.log(styled("Usage", ansi.bold));
-  console.log(formatUsageSummary(getSessionUsage(opts.getSession())));
+  log(opts.io, `\n${styled("Usage", ansi.bold)}`);
+  log(opts.io, formatUsageSummary(getSessionUsage(opts.getSession())));
 }
 
 // ---------------------------------------------------------------------------
@@ -278,19 +288,22 @@ function usageView(opts: SettingsMenuOptions): void {
 // ---------------------------------------------------------------------------
 
 async function advancedMenu(opts: SettingsMenuOptions): Promise<void> {
-  const { readLine, controller } = opts;
+  const { controller, io } = opts;
 
-  console.log();
-  console.log(styled("Advanced", ansi.bold));
-  console.log(styled("Enter a dotted config path (e.g. agents.defaults.temperature), blank to cancel:", ansi.dim));
-  const path = (await readLine())?.trim();
-  if (!path) return;
+  log(io, `\n${styled("Advanced", ansi.bold)}`);
+  const path = await promptText("Enter a dotted config path (e.g. agents.defaults.temperature), Esc to cancel:", {
+    io,
+  });
+  if (path === null) return;
+  const trimmedPath = path.trim();
+  if (!trimmedPath) return;
 
-  const current = controller.getValue(path);
-  console.log(`Current value: ${JSON.stringify(current)}`);
-  console.log(styled("Enter new value, blank to cancel:", ansi.dim));
-  const value = (await readLine())?.trim();
-  if (!value) return;
+  const current = controller.getValue(trimmedPath);
+  log(io, `Current value: ${JSON.stringify(current)}`);
+  const value = await promptText("Enter new value, Esc to cancel:", { io });
+  if (value === null) return;
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return;
 
-  printResult(controller.setValue(path, value), `${path} = ${value}`);
+  printResult(io, controller.setValue(trimmedPath, trimmedValue), `${trimmedPath} = ${trimmedValue}`);
 }

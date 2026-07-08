@@ -174,6 +174,39 @@ export const ExecToolConfigSchema = withAliases(
 
 export type ExecToolConfig = z.infer<typeof ExecToolConfigSchema>;
 
+export const MemoryToolsConfigSchema = withAliases(
+  z.object({
+    /** Register memory_search / memory_get tools and index memory files. */
+    enable: z.boolean().default(true),
+    /** Embedding provider: "auto" | "openai" | "gemini" | "voyage" | "openai-compatible" | "none". */
+    provider: z.string().default("auto"),
+    /** Embedding model id. */
+    model: z.string().default("text-embedding-3-small"),
+    /** Override the embedding API key (else resolved from providers/env). */
+    apiKey: z.string().default(""),
+    /** Override the embedding API base URL. */
+    apiBase: z.string().nullable().default(null),
+    /** Hybrid ranking weights (need not sum to 1; used as-is). */
+    vectorWeight: z.number().min(0).default(0.6),
+    textWeight: z.number().min(0).default(0.4),
+    /** Chunking. */
+    chunkMaxTokens: z.number().int().positive().default(400),
+    chunkOverlapTokens: z.number().int().min(0).default(80),
+    /** Exponential decay half-life for dated daily logs, in days (0 disables). */
+    decayHalfLifeDays: z.number().min(0).default(30),
+    /** MMR diversity trade-off in [0,1] (1 = pure relevance). */
+    mmrLambda: z.number().min(0).max(1).default(0.7),
+    /** Expand search results by one hop along [[wikilinks]] (graph-augmented). */
+    graphExpansion: z.boolean().default(true),
+    /** Relative score boost for a result linked to a top hit. */
+    graphBoost: z.number().min(0).default(0.25),
+    /** Max linked-but-unmatched notes pulled into a query. */
+    graphNeighborLimit: z.number().int().min(0).default(3),
+  }),
+);
+
+export type MemoryToolsConfig = z.infer<typeof MemoryToolsConfigSchema>;
+
 export const MCPServerConfigSchema = withAliases(
   z.object({
     type: z.enum(["stdio", "sse", "streamableHttp"]).nullable().default(null),
@@ -193,6 +226,7 @@ export const ToolsConfigSchema = withAliases(
   z.object({
     web: WebToolsConfigSchema.default({}),
     exec: ExecToolConfigSchema.default({}),
+    memory: MemoryToolsConfigSchema.default({}),
     restrictToWorkspace: z.boolean().default(false),
     mcpServers: z.record(MCPServerConfigSchema).default({}),
   }),
@@ -218,7 +252,7 @@ export const ConfigSchema = withAliases(
 export type Config = z.infer<typeof ConfigSchema>;
 
 // ---------------------------------------------------------------------------
-// Provider matching helpers (mirrors Config._match_provider / get_provider_*)
+// Provider matching helpers
 // ---------------------------------------------------------------------------
 
 import { PROVIDERS, findByName } from "../providers/registry.js";

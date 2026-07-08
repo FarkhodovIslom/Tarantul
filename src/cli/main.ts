@@ -22,7 +22,15 @@ import { AgentRunner } from "../agent/runner.js";
 import { buildMessages, SystemPromptCache } from "../agent/context.js";
 import { recordTurnUsage } from "../agent/usage.js";
 import { CommandRouter, registerBuiltinCommands, buildHelpText } from "../command/index.js";
-import { MemoryStore, MemoryConsolidator } from "../agent/memory.js";
+import { MemoryStoreRegistry, MemoryConsolidator } from "../agent/memory.js";
+import {
+  MemorySearchTool,
+  MemoryGetTool,
+  MemoryLinksTool,
+  MemoryWriteTool,
+  type MemorySearchService,
+} from "../agent/tools/memory.js";
+import { buildMemoryService } from "../agent/memory-setup.js";
 import { SkillsLoader, BUILTIN_SKILLS_DIR } from "../skills/index.js";
 import { getCronDir } from "../config/paths.js";
 import { AgentLoop } from "../agent/loop.js";
@@ -264,6 +272,17 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
       }));
     }
   }
+  // Memory tools — long-term memory search/read/write over per-session MEMORY.md
+  // + daily logs + linked notes (hybrid keyword + embeddings when a key is present).
+  let memoryService: MemorySearchService | null = null;
+  if (cfg.tools.memory.enable) {
+    memoryService = buildMemoryService(cfg, wsPath);
+    tools.register(new MemorySearchTool(memoryService));
+    tools.register(new MemoryGetTool(memoryService));
+    tools.register(new MemoryLinksTool(memoryService));
+    tools.register(new MemoryWriteTool(memoryService));
+  }
+
   // MCP servers — best-effort: a server that fails to connect is skipped
   // with a warning (see agent/tools/mcp.ts), never fatal to startup.
   const mcpConnections = await connectAllMcpServers(cfg.tools.mcpServers, tools);
@@ -291,13 +310,13 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
 
   // Skills + system prompt
   const skillsLoader = new SkillsLoader(wsPath);
-  const memoryStore = new MemoryStore(wsPath);
+  const memoryStores = new MemoryStoreRegistry(wsPath);
   const promptCache = new SystemPromptCache(wsPath);
-  const getSystemPrompt = (): string => {
-    const memory = memoryStore.getMemoryContext();
+  const getSystemPrompt = (key: string): string => {
+    const memory = memoryStores.for(key).getMemoryContext();
     const skillsSummary = skillsLoader.buildSkillsSummary();
     const alwaysContent = skillsLoader.loadSkillsForContext(skillsLoader.getAlwaysSkills());
-    return promptCache.get(memory, skillsSummary, alwaysContent, tools.toolNames);
+    return promptCache.get(key, memory, skillsSummary, alwaysContent, tools.toolNames);
   };
 
   // Memory consolidation — compresses long sessions into MEMORY.md/HISTORY.md.
@@ -312,12 +331,14 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
       buildMessages({
         history: o.history,
         currentMessage: o.currentMessage,
-        systemPrompt: getSystemPrompt(),
+        systemPrompt: getSystemPrompt(o.key ?? ""),
         channel: o.channel ?? null,
         chatId: o.chatId ?? null,
         timezone: cfg.agents.defaults.timezone,
       }),
     getToolDefinitions: () => tools.getDefinitions(),
+    // Immediately refresh the search index after consolidation writes notes/logs.
+    ...(memoryService ? { onConsolidated: (key: string) => memoryService!.reindex(key) } : {}),
   });
 
   // Gateway loop: bus (inbound) → AgentRunner → bus (outbound).
@@ -329,13 +350,17 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     getSystemPrompt,
     timezone: cfg.agents.defaults.timezone,
     cronTool,
+    memoryService,
     consolidator,
     sendProgress: cfg.channels.sendProgress,
   });
 
   const { startApiServer } = await import("../api/server.js");
   const server = startApiServer(
-    { host, port, timeoutSecs, modelName, apiKey, getSystemPrompt },
+    {
+      host, port, timeoutSecs, modelName, apiKey, getSystemPrompt,
+      wrapTurn: memoryService ? (key, fn) => memoryService!.runWithSession(key, fn) : null,
+    },
     runner, sessions, tools, runSpec,
   );
 
@@ -439,6 +464,16 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       }));
     }
   }
+  // Memory tools — same long-term memory suite as the gateway; this REPL is a
+  // single session, so we bind it to `sessionId` in runTurn.
+  let memoryService: MemorySearchService | null = null;
+  if (cfg.tools.memory.enable) {
+    memoryService = buildMemoryService(cfg, wsPath);
+    tools.register(new MemorySearchTool(memoryService));
+    tools.register(new MemoryGetTool(memoryService));
+    tools.register(new MemoryLinksTool(memoryService));
+    tools.register(new MemoryWriteTool(memoryService));
+  }
   // MCP servers — best-effort: a server that fails to connect is skipped
   // with a warning (see agent/tools/mcp.ts), never fatal to startup.
   const mcpConnections = await connectAllMcpServers(cfg.tools.mcpServers, tools);
@@ -447,15 +482,15 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
 
   // Skills + system prompt cache
   const skillsLoader = new SkillsLoader(wsPath);
-  const memoryStore = new MemoryStore(wsPath);
+  const memoryStores = new MemoryStoreRegistry(wsPath);
   const promptCache = new SystemPromptCache(wsPath);
 
-  function getSystemPrompt(): string {
-    const memory = memoryStore.getMemoryContext();
+  function getSystemPrompt(key: string): string {
+    const memory = memoryStores.for(key).getMemoryContext();
     const skillsSummary = skillsLoader.buildSkillsSummary();
     const alwaysSkills = skillsLoader.getAlwaysSkills();
     const alwaysContent = skillsLoader.loadSkillsForContext(alwaysSkills);
-    return promptCache.get(memory, skillsSummary, alwaysContent, tools.toolNames);
+    return promptCache.get(key, memory, skillsSummary, alwaysContent, tools.toolNames);
   }
 
   // Command router for /slash commands
@@ -475,13 +510,14 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // Run one turn: build messages → run → render response
   // -----------------------------------------------------------------------
   async function runTurn(userMessage: string, streaming: boolean): Promise<string | null> {
+    memoryService?.setSessionKey(sessionId);
     const session = sessions.getOrCreate(sessionId);
     const history = session.getHistory(0);
 
     const messages = buildMessages({
       history,
       currentMessage: userMessage,
-      systemPrompt: getSystemPrompt(),
+      systemPrompt: getSystemPrompt(sessionId),
       channel: "cli",
       chatId: "direct",
     });
@@ -576,16 +612,21 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     if (!trimmed) continue;
     if (repl.isExit(trimmed)) break;
 
-    // /settings — owns the input loop directly (needs cfg/provider access
-    // the CommandRouter handlers don't have), so it's special-cased here
-    // rather than routed through the CommandRouter.
+    // /settings — needs cfg/provider access the CommandRouter handlers
+    // don't have, and takes exclusive raw-keypress control of stdin for its
+    // arrow-key UI, so it's special-cased here rather than routed through
+    // the CommandRouter. suspend()/restore() hand stdin to it and back.
     if (trimmed === "/settings" || trimmed === "/config") {
-      await runSettingsMenu({
-        readLine: (o) => repl.readLine({ history: !o?.secure }),
-        controller: settings,
-        skillsLoader,
-        getSession: () => sessions.getOrCreate(sessionId),
-      });
+      repl.suspend();
+      try {
+        await runSettingsMenu({
+          controller: settings,
+          skillsLoader,
+          getSession: () => sessions.getOrCreate(sessionId),
+        });
+      } finally {
+        repl.restore();
+      }
       continue;
     }
 

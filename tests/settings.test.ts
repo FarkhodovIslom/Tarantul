@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 
 import { ConfigSchema } from "../src/config/schema.js";
 import { loadConfig } from "../src/config/loader.js";
 import { SettingsController, maskKey } from "../src/config/settings.js";
-import { runSettingsMenu, type MenuReadLine } from "../src/cli/settings-menu.js";
+import { runSettingsMenu } from "../src/cli/settings-menu.js";
+import type { KeyboardIO, KeyEvent } from "../src/cli/keyboard.js";
 import { SkillsLoader } from "../src/skills/index.js";
 import { Session } from "../src/session/manager.js";
 
@@ -218,126 +220,153 @@ describe("SettingsController", () => {
 });
 
 // ---------------------------------------------------------------------------
-// runSettingsMenu — driven by a scripted fake readLine
+// runSettingsMenu — driven by a scripted fake keyboard (arrow-key UI)
 // ---------------------------------------------------------------------------
 
-/** Feeds a fixed sequence of inputs; records whether each call requested `secure`. */
-function scriptedReadLine(inputs: string[]): { readLine: MenuReadLine; secureCalls: boolean[] } {
-  const queue = [...inputs];
-  const secureCalls: boolean[] = [];
-  const readLine: MenuReadLine = (opts) => {
-    secureCalls.push(Boolean(opts?.secure));
-    const next = queue.shift();
-    return Promise.resolve(next === undefined ? null : next);
-  };
-  return { readLine, secureCalls };
+interface ScriptedKey {
+  str: string;
+  key: KeyEvent;
 }
 
-function makeMenuDeps(cfg: ReturnType<typeof ConfigSchema.parse>, configPath: string, tmpDir: string) {
-  const controller = new SettingsController(cfg, configPath);
-  const skillsLoader = new SkillsLoader(tmpDir, join(tmpDir, "no-builtin-skills"));
+const DOWN: ScriptedKey = { str: "", key: { name: "down" } };
+const ENTER: ScriptedKey = { str: "\r", key: { name: "enter" } };
+const ESC: ScriptedKey = { str: "", key: { name: "escape" } };
+
+function downTimes(n: number): ScriptedKey[] {
+  return Array.from({ length: n }, () => DOWN);
+}
+
+function chars(s: string): ScriptedKey[] {
+  return [...s].map((c) => ({ str: c, key: { name: c } }));
+}
+
+/**
+ * Fake KeyboardIO for `selectMenu`/`promptText`. Each `.on("keypress", …)`
+ * call (i.e. each prompt the menu shows) consumes the next `steps[]` entry
+ * and asynchronously replays its keys to that listener — mirrors a user
+ * typing a scripted sequence into a sequence of prompts. `writes` captures
+ * everything rendered, so tests can assert secrets are masked, not just
+ * that the final value was applied.
+ */
+function scriptedKeyboardIO(steps: ScriptedKey[][]): { io: KeyboardIO; writes: string[] } {
+  const emitter = new EventEmitter();
+  const writes: string[] = [];
+  let stepIndex = 0;
+
+  const io: KeyboardIO = {
+    input: {
+      on: (_event, listener) => {
+        const keys = steps[stepIndex++] ?? [];
+        queueMicrotask(async () => {
+          for (const { str, key } of keys) {
+            listener(str, key);
+            await Promise.resolve();
+          }
+        });
+        return emitter;
+      },
+      removeListener: (_event, listener) => {
+        emitter.removeListener("keypress", listener);
+        return emitter;
+      },
+    },
+    output: {
+      write: (chunk: string) => {
+        writes.push(chunk);
+        return true;
+      },
+    },
+  };
+  return { io, writes };
+}
+
+function makeMenuDeps(cfg: ReturnType<typeof ConfigSchema.parse>, cfgPath: string, workDir: string) {
+  const controller = new SettingsController(cfg, cfgPath);
+  const skillsLoader = new SkillsLoader(workDir, join(workDir, "no-builtin-skills"));
   const session = new Session({ key: "test" });
   return { controller, skillsLoader, getSession: () => session };
 }
 
 describe("runSettingsMenu", () => {
-  it("returns immediately on EOF at the top menu", async () => {
+  it("returns immediately on Esc at the top menu", async () => {
     const cfg = ConfigSchema.parse({});
-    const { readLine } = scriptedReadLine([]); // first call -> null
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runSettingsMenu({ readLine, ...makeMenuDeps(cfg, configPath, tmpDir) });
-    } finally {
-      logSpy.mockRestore();
-    }
+    const { io } = scriptedKeyboardIO([[ESC]]);
+    await runSettingsMenu({ ...makeMenuDeps(cfg, configPath, tmpDir), io });
   });
 
-  it("sets the model via option 1 and returns via 0", async () => {
+  it("sets the model via arrow selection + Enter, then Esc back to chat", async () => {
     const cfg = ConfigSchema.parse({});
-    const { controller, skillsLoader, getSession } = makeMenuDeps(cfg, configPath, tmpDir);
-    const { readLine } = scriptedReadLine(["1", "openai/gpt-4o", "0"]);
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    // top menu: "Model" is index 0 (default highlight) -> Enter picks it.
+    const { io } = scriptedKeyboardIO([[ENTER], chars("openai/gpt-4o").concat(ENTER), [ESC]]);
 
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runSettingsMenu({ readLine, controller, skillsLoader, getSession });
-    } finally {
-      logSpy.mockRestore();
-    }
+    await runSettingsMenu({ ...deps, io });
 
     expect(cfg.agents.defaults.model).toBe("openai/gpt-4o");
     const reloaded = loadConfig(configPath);
     expect(reloaded.agents.defaults.model).toBe("openai/gpt-4o");
   });
 
-  it("sets an API key via option 2 with secure input and does not fall through to 'auto' parsing", async () => {
+  it("sets an API key via the provider submenu, masking it on screen", async () => {
     const cfg = ConfigSchema.parse({});
-    const { controller, skillsLoader, getSession } = makeMenuDeps(cfg, configPath, tmpDir);
-    const anthropicIdx = controller.providerList().findIndex((p) => p.name === "anthropic") + 1;
-    const { readLine, secureCalls } = scriptedReadLine([
-      "2",
-      String(anthropicIdx),
-      "sk-ant-scripted",
-      "0",
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const anthropicIdx = deps.controller.providerList().findIndex((p) => p.name === "anthropic");
+    expect(anthropicIdx).toBeGreaterThanOrEqual(0);
+
+    const { io, writes } = scriptedKeyboardIO([
+      downTimes(1).concat(ENTER), // top menu -> "Provider / API keys" (index 1)
+      [ENTER], // provider submenu -> "Set an API key" (index 0)
+      downTimes(anthropicIdx).concat(ENTER), // provider list -> anthropic
+      chars("sk-ant-scripted").concat(ENTER), // secure key entry
+      [ESC], // back to chat
     ]);
 
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runSettingsMenu({ readLine, controller, skillsLoader, getSession });
-    } finally {
-      logSpy.mockRestore();
-    }
+    await runSettingsMenu({ ...deps, io });
 
     expect(cfg.providers.anthropic.apiKey).toBe("sk-ant-scripted");
-    // Inputs are: "2" (menu), index, "sk-ant-scripted" (the key itself), "0" (back).
-    // Only the key entry — the 3rd read, index 2 — must be marked secure.
-    expect(secureCalls).toEqual([false, false, true, false]);
+    expect(writes.some((w) => w.includes("sk-ant-scripted"))).toBe(false);
+    expect(writes.some((w) => w.includes("•"))).toBe(true);
   });
 
-  it("sets generation params via option 3", async () => {
+  it("sets generation params via arrow selection", async () => {
     const cfg = ConfigSchema.parse({});
-    const { controller, skillsLoader, getSession } = makeMenuDeps(cfg, configPath, tmpDir);
-    const { readLine } = scriptedReadLine(["3", "1", "0.6", "0", "0"]);
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const { io } = scriptedKeyboardIO([
+      downTimes(2).concat(ENTER), // top menu -> "Generation" (index 2)
+      [ENTER], // generation submenu -> "Temperature" (index 0)
+      chars("0.6").concat(ENTER),
+      [ESC],
+    ]);
 
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runSettingsMenu({ readLine, controller, skillsLoader, getSession });
-    } finally {
-      logSpy.mockRestore();
-    }
+    await runSettingsMenu({ ...deps, io });
 
     expect(cfg.agents.defaults.temperature).toBe(0.6);
   });
 
-  it("skills and usage views are read-only and don't consume extra input", async () => {
+  it("skills and usage views are read-only and don't consume extra prompts", async () => {
     const cfg = ConfigSchema.parse({});
-    const { controller, skillsLoader, getSession } = makeMenuDeps(cfg, configPath, tmpDir);
-    const { readLine } = scriptedReadLine(["4", "5", "0"]);
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const { io } = scriptedKeyboardIO([
+      downTimes(3).concat(ENTER), // top menu -> "Skills" (index 3), synchronous, no prompt
+      downTimes(4).concat(ENTER), // top menu -> "Usage" (index 4), synchronous, no prompt
+      [ESC], // top menu -> back to chat
+    ]);
 
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runSettingsMenu({ readLine, controller, skillsLoader, getSession });
-    } finally {
-      logSpy.mockRestore();
-    }
-    // Reaching here without hanging confirms views 4 and 5 consumed no extra reads.
+    await runSettingsMenu({ ...deps, io });
+    // Reaching here without hanging confirms the read-only views consumed no extra prompts.
   });
 
   it("advanced get/set applies a valid dotted path", async () => {
     const cfg = ConfigSchema.parse({});
-    const { controller, skillsLoader, getSession } = makeMenuDeps(cfg, configPath, tmpDir);
-    const { readLine } = scriptedReadLine([
-      "6",
-      "agents.defaults.maxTokens",
-      "3000",
-      "0",
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const { io } = scriptedKeyboardIO([
+      downTimes(5).concat(ENTER), // top menu -> "Advanced" (index 5)
+      chars("agents.defaults.maxTokens").concat(ENTER),
+      chars("3000").concat(ENTER),
+      [ESC],
     ]);
 
-    const logSpy = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runSettingsMenu({ readLine, controller, skillsLoader, getSession });
-    } finally {
-      logSpy.mockRestore();
-    }
+    await runSettingsMenu({ ...deps, io });
 
     expect(cfg.agents.defaults.maxTokens).toBe(3000);
   });

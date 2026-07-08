@@ -1,10 +1,28 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  readdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { LLMProvider } from "../providers/base.js";
 import { hasToolCalls } from "../providers/base.js";
 import type { Session, SessionManager } from "../session/manager.js";
 import { estimateMessageTokens } from "../utils/tokens.js";
+import { safeFilename } from "../utils/helpers.js";
 import { logger } from "../utils/logger.js";
+
+/**
+ * Map a session key (`channel:chatId`) to a filesystem-safe subdirectory name.
+ * A falsy key selects the shared/global memory directory (`memory/`) so the
+ * default `new MemoryStore(ws)` keeps its original single-file layout.
+ */
+function memoryDir(workspace: string, key?: string | null): string {
+  const base = join(workspace, "memory");
+  return key ? join(base, safeFilename(key.replace(/:/g, "_"))) : base;
+}
 
 // ---------------------------------------------------------------------------
 // save_memory tool definition (sent to LLM once per consolidation call)
@@ -28,8 +46,35 @@ const SAVE_MEMORY_TOOL: Record<string, unknown>[] = [
           memory_update: {
             type: "string",
             description:
-              "Full updated long-term memory as markdown. Include all existing " +
-              "facts plus new ones. Return unchanged if nothing new.",
+              "Full updated long-term memory (MEMORY.md) as markdown — the curated index " +
+              "of durable facts. Include all existing facts plus new ones, and reference " +
+              "atomic notes with [[Note Name]] wikilinks. Return unchanged if nothing new.",
+          },
+          notes: {
+            type: "array",
+            description:
+              "Atomic notes to create/update — one per distinct person, project, place, " +
+              "or recurring topic worth remembering. Connect related notes to each other " +
+              "with [[Other Note]] wikilinks inside the content so the memory forms a graph.",
+            items: {
+              type: "object",
+              properties: {
+                name: {
+                  type: "string",
+                  description: "Note title, e.g. 'Project Apollo' or 'Alice'.",
+                },
+                content: {
+                  type: "string",
+                  description: "Markdown body. Use [[wikilinks]] to reference related notes.",
+                },
+                mode: {
+                  type: "string",
+                  enum: ["replace", "append"],
+                  description: "'replace' (default) rewrites the note; 'append' adds to it.",
+                },
+              },
+              required: ["name", "content"],
+            },
           },
         },
         required: ["history_entry", "memory_update"],
@@ -45,12 +90,43 @@ function isToolChoiceUnsupported(content: string | null): boolean {
   return TOOL_CHOICE_ERROR_MARKERS.some((m) => text.includes(m));
 }
 
+interface ParsedNote {
+  name: string;
+  content: string;
+  append: boolean;
+}
+
+function parseNotes(raw: unknown): ParsedNote[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ParsedNote[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const rec = item as Record<string, unknown>;
+    const name = rec["name"];
+    const content = rec["content"];
+    if (
+      typeof name !== "string" ||
+      !name.trim() ||
+      typeof content !== "string" ||
+      !content.trim()
+    ) {
+      continue;
+    }
+    out.push({ name: name.trim(), content, append: rec["mode"] === "append" });
+  }
+  return out;
+}
+
 function normalizeArgs(
   args: unknown,
-): { historyEntry: string; memoryUpdate: string } | null {
+): { historyEntry: string; memoryUpdate: string; notes: ParsedNote[] } | null {
   let obj: Record<string, unknown> | null = null;
   if (typeof args === "string") {
-    try { obj = JSON.parse(args) as Record<string, unknown>; } catch { return null; }
+    try {
+      obj = JSON.parse(args) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   } else if (Array.isArray(args)) {
     obj = (args[0] as Record<string, unknown> | undefined) ?? null;
   } else if (typeof args === "object" && args !== null) {
@@ -66,6 +142,7 @@ function normalizeArgs(
   return {
     historyEntry: typeof historyEntry === "string" ? historyEntry : JSON.stringify(historyEntry),
     memoryUpdate: typeof memoryUpdate === "string" ? memoryUpdate : JSON.stringify(memoryUpdate),
+    notes: parseNotes(obj["notes"]),
   };
 }
 
@@ -74,17 +151,25 @@ function normalizeArgs(
 // ---------------------------------------------------------------------------
 
 export class MemoryStore {
+  /** Absolute path to this store's memory directory (holds MEMORY.md + logs). */
+  readonly dir: string;
   private readonly memoryFile: string;
   private readonly historyFile: string;
   private consecutiveFailures = 0;
 
   private static readonly MAX_FAILURES_BEFORE_RAW_ARCHIVE = 3;
 
-  constructor(workspace: string) {
-    const dir = join(workspace, "memory");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    this.memoryFile = join(dir, "MEMORY.md");
-    this.historyFile = join(dir, "HISTORY.md");
+  /**
+   * @param workspace workspace root.
+   * @param key optional session key (`channel:chatId`). When provided, memory
+   *   is isolated under `memory/<safe-key>/` so distinct chats/channels never
+   *   share long-term memory. Omit for the shared global store.
+   */
+  constructor(workspace: string, key?: string | null) {
+    this.dir = memoryDir(workspace, key);
+    if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true });
+    this.memoryFile = join(this.dir, "MEMORY.md");
+    this.historyFile = join(this.dir, "HISTORY.md");
   }
 
   readLongTerm(): string {
@@ -95,13 +180,96 @@ export class MemoryStore {
     writeFileSync(this.memoryFile, content, "utf-8");
   }
 
+  /** Legacy single-file history log. Retained for back-compat; new writes go to daily logs. */
   appendHistory(entry: string): void {
     appendFileSync(this.historyFile, entry.trimEnd() + "\n\n", "utf-8");
   }
 
+  /** Path to the append-only daily log for a given date (defaults to today). */
+  dailyLogPath(date: Date = new Date()): string {
+    return join(this.dir, `${MemoryStore.dateStamp(date)}.md`);
+  }
+
+  /** Append a running note to today's append-only daily log (memory/YYYY-MM-DD.md). */
+  appendDaily(entry: string, date: Date = new Date()): void {
+    appendFileSync(this.dailyLogPath(date), entry.trimEnd() + "\n\n", "utf-8");
+  }
+
+  private readDaily(date: Date): string {
+    const p = this.dailyLogPath(date);
+    return existsSync(p) ? readFileSync(p, "utf-8").trim() : "";
+  }
+
+  /** Directory holding atomic, wikilink-connected notes (`notes/<Name>.md`). */
+  get notesDir(): string {
+    return join(this.dir, "notes");
+  }
+
+  /**
+   * Filesystem path for a named note. `name` may include or omit `.md`. Path
+   * separators and `..` are neutralized so a note always stays inside `notes/`.
+   */
+  notePath(name: string): string {
+    const bare = name.replace(/\.md$/i, "");
+    const safe =
+      bare
+        .replace(/[/\\]+/g, "-")
+        .replace(/\.\.+/g, ".")
+        .replace(/^\.+/, "")
+        .trim() || "untitled";
+    return join(this.notesDir, `${safe}.md`);
+  }
+
+  /** Write (or append to) an atomic note; creates `notes/` on first use. */
+  writeNote(name: string, content: string, append = false): void {
+    if (!existsSync(this.notesDir)) mkdirSync(this.notesDir, { recursive: true });
+    const p = this.notePath(name);
+    if (append) appendFileSync(p, content.trimEnd() + "\n\n", "utf-8");
+    else writeFileSync(p, content, "utf-8");
+  }
+
+  readNote(name: string): string {
+    const p = this.notePath(name);
+    return existsSync(p) ? readFileSync(p, "utf-8") : "";
+  }
+
+  /** Names (without `.md`) of existing atomic notes, for consolidation context. */
+  listNoteNames(): string[] {
+    if (!existsSync(this.notesDir)) return [];
+    try {
+      return readdirSync(this.notesDir)
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => f.replace(/\.md$/i, ""));
+    } catch {
+      return [];
+    }
+  }
+
+  private static dateStamp(date: Date): string {
+    return date.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  }
+
+  /**
+   * System-prompt memory context: curated long-term memory plus the tail of the
+   * daily logs (today + yesterday), so each session starts with recent context.
+   * Older context is reachable on demand via the memory_search tool.
+   */
   getMemoryContext(): string {
+    const parts: string[] = [];
     const lt = this.readLongTerm();
-    return lt ? `## Long-term Memory\n${lt}` : "";
+    if (lt.trim()) parts.push(`## Long-term Memory\n${lt.trim()}`);
+
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 86_400_000);
+    const recent = [
+      { label: MemoryStore.dateStamp(yesterday), body: this.readDaily(yesterday) },
+      { label: MemoryStore.dateStamp(today), body: this.readDaily(today) },
+    ].filter((d) => d.body);
+    if (recent.length) {
+      const logs = recent.map((d) => `### ${d.label}\n${d.body}`).join("\n\n");
+      parts.push(`## Recent Daily Log\n${logs}`);
+    }
+    return parts.join("\n\n");
   }
 
   private static formatMessages(messages: Record<string, unknown>[]): string {
@@ -123,17 +291,26 @@ export class MemoryStore {
     if (!messages.length) return true;
 
     const currentMemory = this.readLongTerm();
+    const existingNotes = this.listNoteNames();
     const prompt =
       `Process this conversation and call the save_memory tool with your consolidation.\n\n` +
-      `## Current Long-term Memory\n${currentMemory || "(empty)"}\n\n` +
+      `## Current Long-term Memory (MEMORY.md)\n${currentMemory || "(empty)"}\n\n` +
+      `## Existing Notes\n${existingNotes.length ? existingNotes.map((n) => `[[${n}]]`).join(", ") : "(none)"}\n\n` +
       `## Conversation to Process\n${MemoryStore.formatMessages(messages)}`;
 
     const chatMessages: Record<string, unknown>[] = [
       {
         role: "system",
         content:
-          "You are a memory consolidation agent. " +
-          "Call the save_memory tool with your consolidation of the conversation.",
+          "You are a memory consolidation agent building an Obsidian-style knowledge graph. " +
+          "Distill durable, reusable knowledge from the conversation and call the save_memory tool:\n" +
+          "- history_entry: a timestamped paragraph for today's daily log.\n" +
+          "- notes: one atomic note per distinct person, project, place, or recurring topic. " +
+          "Reuse existing note names when they apply, and connect related notes with [[Other Note]] " +
+          "wikilinks inside each note's content.\n" +
+          "- memory_update: the curated MEMORY.md index of the most important durable facts, " +
+          "referencing notes with [[Note Name]].\n" +
+          "Do not invent facts. Prefer linking over duplicating.",
       },
       { role: "user", content: prompt },
     ];
@@ -177,13 +354,23 @@ export class MemoryStore {
         return this._failOrRawArchive(messages);
       }
 
-      this.appendHistory(entry);
+      this.appendDaily(entry);
       if (parsed.memoryUpdate !== currentMemory) {
         this.writeLongTerm(parsed.memoryUpdate);
       }
+      for (const note of parsed.notes) {
+        try {
+          this.writeNote(note.name, note.content, note.append);
+        } catch (err) {
+          logger.warn({ err, note: note.name }, "Memory consolidation: failed to write note");
+        }
+      }
 
       this.consecutiveFailures = 0;
-      logger.info({ count: messages.length }, "Memory consolidation done");
+      logger.info(
+        { count: messages.length, notes: parsed.notes.length },
+        "Memory consolidation done",
+      );
       return true;
     } catch (err) {
       logger.error({ err }, "Memory consolidation failed");
@@ -202,8 +389,33 @@ export class MemoryStore {
   private _rawArchive(messages: Record<string, unknown>[]): void {
     const ts = new Date().toISOString().slice(0, 16).replace("T", " ");
     const formatted = MemoryStore["formatMessages"](messages);
-    this.appendHistory(`[${ts}] [RAW] ${messages.length} messages\n${formatted}`);
+    this.appendDaily(`[${ts}] [RAW] ${messages.length} messages\n${formatted}`);
     logger.warn({ count: messages.length }, "Memory: raw-archived after repeated failures");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryStoreRegistry — one MemoryStore per session key, created on demand
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves (and caches) a per-session `MemoryStore`. Long-term memory is scoped
+ * by session key so a fact consolidated from one chat/channel never leaks into
+ * another chat's system prompt. A falsy key resolves to the shared global store.
+ */
+export class MemoryStoreRegistry {
+  private readonly stores = new Map<string, MemoryStore>();
+
+  constructor(private readonly workspace: string) {}
+
+  for(key?: string | null): MemoryStore {
+    const cacheKey = key ?? "";
+    let store = this.stores.get(cacheKey);
+    if (!store) {
+      store = new MemoryStore(this.workspace, key);
+      this.stores.set(cacheKey, store);
+    }
+    return store;
   }
 }
 
@@ -222,13 +434,18 @@ export interface ConsolidatorOptions {
     currentMessage: string;
     channel?: string | null;
     chatId?: string | null;
+    /** Session key, so the token-probe prompt uses this session's memory. */
+    key?: string | null;
   }) => Record<string, unknown>[];
   getToolDefinitions: () => unknown[];
   maxCompletionTokens?: number;
+  /** Invoked after a session's memory changed, so the search index can refresh. */
+  onConsolidated?: (key: string) => Promise<void> | void;
 }
 
 export class MemoryConsolidator {
-  readonly store: MemoryStore;
+  /** Per-session long-term memory stores (isolated by session key). */
+  readonly stores: MemoryStoreRegistry;
   private readonly provider: LLMProvider;
   private readonly model: string;
   private readonly sessions: SessionManager;
@@ -236,6 +453,7 @@ export class MemoryConsolidator {
   private readonly maxCompletionTokens: number;
   private readonly buildMessages: ConsolidatorOptions["buildMessages"];
   private readonly getToolDefinitions: ConsolidatorOptions["getToolDefinitions"];
+  private readonly onConsolidated: ConsolidatorOptions["onConsolidated"];
   /**
    * Per-session consolidation lock, keyed by session key. Each call chains
    * onto the previous one so consolidations for the same session never run
@@ -250,7 +468,7 @@ export class MemoryConsolidator {
   private static readonly SAFETY_BUFFER = 1024;
 
   constructor(opts: ConsolidatorOptions) {
-    this.store = new MemoryStore(opts.workspace);
+    this.stores = new MemoryStoreRegistry(opts.workspace);
     this.provider = opts.provider;
     this.model = opts.model;
     this.sessions = opts.sessions;
@@ -258,6 +476,7 @@ export class MemoryConsolidator {
     this.maxCompletionTokens = opts.maxCompletionTokens ?? 4096;
     this.buildMessages = opts.buildMessages;
     this.getToolDefinitions = opts.getToolDefinitions;
+    this.onConsolidated = opts.onConsolidated;
   }
 
   // ---------------------------------------------------------------------------
@@ -267,13 +486,14 @@ export class MemoryConsolidator {
   estimateSessionPromptTokens(session: Session): number {
     const history = session.getHistory(0);
     const [channel, chatId] = session.key.includes(":")
-      ? session.key.split(":", 2) as [string, string]
+      ? (session.key.split(":", 2) as [string, string])
       : [null, null];
     const probeMessages = this.buildMessages({
       history,
       currentMessage: "[token-probe]",
       channel,
       chatId,
+      key: session.key,
     });
     // Simple token estimate: sum message tokens + tool JSON estimate
     const msgTokens = probeMessages.reduce(
@@ -343,28 +563,50 @@ export class MemoryConsolidator {
     let estimated = this.estimateSessionPromptTokens(session);
     if (estimated <= 0 || estimated < budget) return;
 
-    for (let round = 0; round < MemoryConsolidator.MAX_CONSOLIDATION_ROUNDS; round++) {
-      if (estimated <= target) return;
+    // Whether any round actually wrote to memory — gates the post-reindex so we
+    // don't refresh the index on a no-op pass.
+    let changed = false;
+    try {
+      for (let round = 0; round < MemoryConsolidator.MAX_CONSOLIDATION_ROUNDS; round++) {
+        if (estimated <= target) return;
 
-      const boundary = this.pickConsolidationBoundary(session, Math.max(1, estimated - target));
-      if (!boundary) return;
+        const boundary = this.pickConsolidationBoundary(session, Math.max(1, estimated - target));
+        if (!boundary) return;
 
-      const chunk = session.messages.slice(session.lastConsolidated, boundary.endIdx);
-      if (!chunk.length) return;
+        const chunk = session.messages.slice(session.lastConsolidated, boundary.endIdx);
+        if (!chunk.length) return;
 
-      logger.info(
-        { round, key: session.key, estimated, total: this.contextWindowTokens, chunk: chunk.length },
-        "Memory consolidation round",
-      );
+        logger.info(
+          {
+            round,
+            key: session.key,
+            estimated,
+            total: this.contextWindowTokens,
+            chunk: chunk.length,
+          },
+          "Memory consolidation round",
+        );
 
-      const ok = await this.store.consolidate(chunk, this.provider, this.model);
-      if (!ok) return;
+        const ok = await this.stores.for(session.key).consolidate(chunk, this.provider, this.model);
+        if (!ok) return;
+        changed = true;
 
-      session.lastConsolidated = boundary.endIdx;
-      await this.sessions.save(session);
+        session.lastConsolidated = boundary.endIdx;
+        await this.sessions.save(session);
 
-      estimated = this.estimateSessionPromptTokens(session);
-      if (estimated <= 0) return;
+        estimated = this.estimateSessionPromptTokens(session);
+        if (estimated <= 0) return;
+      }
+    } finally {
+      // Refresh the search index once, after all rounds, so newly written notes
+      // and logs are immediately searchable rather than on the next lazy search.
+      if (changed && this.onConsolidated) {
+        try {
+          await this.onConsolidated(session.key);
+        } catch (err) {
+          logger.warn({ err, key: session.key }, "post-consolidation reindex failed");
+        }
+      }
     }
   }
 }

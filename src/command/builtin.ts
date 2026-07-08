@@ -86,7 +86,7 @@ async function cmdStatus(ctx: CommandContext): Promise<OutboundMessage> {
         : `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`;
 
   const lines = [
-    `nanobot v${VERSION}`,
+    `tarantul v${VERSION}`,
     `Model: ${model}`,
     `Uptime: ${uptimeStr}`,
     `Context window: ${ctxTokens ? ctxTokens.toLocaleString() + " tokens" : "default"}`,
@@ -140,7 +140,7 @@ async function cmdHelp(ctx: CommandContext): Promise<OutboundMessage> {
 
 export function buildHelpText(): string {
   return [
-    "🐈 nanobot commands:",
+    "🕷️ tarantul commands:",
     "/new      — Start a new conversation",
     "/stop     — Stop the current task",
     "/restart  — Restart the bot",

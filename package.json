@@ -1,10 +1,32 @@
 {
   "name": "tarantul",
   "version": "0.1.4",
-  "description": "A lightweight personal AI assistant framework",
+  "description": "A lightweight personal AI assistant framework with a real long-term memory: a hybrid-searched, wikilink-connected knowledge graph the agent builds itself.",
   "type": "module",
   "license": "MIT",
-  "keywords": ["ai", "agent", "chatbot"],
+  "author": "Islom Farkhodov",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FarkhodovIslom/Tarantul.git"
+  },
+  "homepage": "https://github.com/FarkhodovIslom/Tarantul#readme",
+  "bugs": {
+    "url": "https://github.com/FarkhodovIslom/Tarantul/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "assistant",
+    "chatbot",
+    "llm",
+    "bun",
+    "typescript",
+    "memory",
+    "knowledge-graph",
+    "telegram",
+    "slack",
+    "discord"
+  ],
   "bin": {
     "tarantul": "./src/cli/main.ts"
   },
