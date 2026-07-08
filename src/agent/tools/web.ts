@@ -9,7 +9,8 @@
 
 import { Tool } from "./base.js";
 import { extractReadable } from "./html.js";
-import { createSearchProvider, type SearchProvider } from "./search-providers.js";
+import { type SearchProvider, createSearchProvider } from "./search-providers.js";
+import { checkHostname } from "./ssrf.js";
 
 const MAX_FETCH_BYTES = 2_000_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -60,7 +61,9 @@ function truncate(text: string, maxChars: number): string {
 
 export class WebFetchTool extends Tool {
   override readonly name = "web_fetch";
-  override get readOnly(): boolean { return true; }
+  override get readOnly(): boolean {
+    return true;
+  }
   override readonly description =
     "Fetch a URL (http/https) and scrape its main content as readable Markdown " +
     "(title, headings, links, and lists preserved). Handles HTML, plain text, and " +
@@ -79,7 +82,15 @@ export class WebFetchTool extends Tool {
     required: ["url"],
   };
 
-  constructor(private readonly proxy: string | null = null) {
+  /**
+   * @param proxy         optional outbound proxy for Bun's fetch
+   * @param allowPrivate  when true, skip the SSRF guard and permit fetching
+   *                      loopback/private/link-local hosts (config opt-in)
+   */
+  constructor(
+    private readonly proxy: string | null = null,
+    private readonly allowPrivate = false,
+  ) {
     super();
   }
 
@@ -99,6 +110,16 @@ export class WebFetchTool extends Tool {
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return `Error: unsupported URL scheme '${parsed.protocol}'`;
+    }
+
+    // SSRF guard: resolve the host and refuse private/reserved targets so
+    // untrusted content can't steer a fetch at internal services (e.g. cloud
+    // metadata at 169.254.169.254). Opt out via tools.web.allowPrivateAddresses.
+    if (!this.allowPrivate) {
+      const guard = await checkHostname(parsed.hostname);
+      if (guard.blocked) {
+        return `Error: refusing to fetch — ${guard.reason}. Set tools.web.allowPrivateAddresses to allow private/reserved hosts.`;
+      }
     }
 
     const controller = new AbortController();
@@ -163,7 +184,9 @@ export interface WebSearchOpts {
 
 export class WebSearchTool extends Tool {
   override readonly name = "web_search";
-  override get readOnly(): boolean { return true; }
+  override get readOnly(): boolean {
+    return true;
+  }
   override readonly description =
     "Search the web and return a list of results (title, url, snippet). Works " +
     "out of the box (DuckDuckGo) with no API key; Brave, Tavily, and SearXNG are " +

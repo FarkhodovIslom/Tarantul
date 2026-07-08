@@ -160,6 +160,10 @@ export const WebToolsConfigSchema = withAliases(
   z.object({
     enable: z.boolean().default(true),
     proxy: z.string().nullable().default(null),
+    // When false (default), web_fetch resolves each URL's host and refuses
+    // loopback/private/link-local targets (SSRF guard). Set true only for
+    // trusted local use (e.g. fetching your own dev server).
+    allowPrivateAddresses: z.boolean().default(false),
     search: WebSearchConfigSchema.default({}),
   }),
 );

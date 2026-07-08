@@ -9,8 +9,8 @@
  * fetch()'s own resolution; this is defense-in-depth, not a hard sandbox.
  */
 
-import { BlockList, isIP } from "node:net";
 import { lookup } from "node:dns/promises";
+import { BlockList, isIP } from "node:net";
 
 const blocklist = new BlockList();
 

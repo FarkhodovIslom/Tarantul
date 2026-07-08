@@ -262,7 +262,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     }));
   }
   if (cfg.tools.web.enable) {
-    tools.register(new WebFetchTool(cfg.tools.web.proxy));
+    tools.register(new WebFetchTool(cfg.tools.web.proxy, cfg.tools.web.allowPrivateAddresses));
     // web_search is always available — the default provider (DuckDuckGo) needs
     // no API key; keyed providers surface a config hint at call time if unset.
     tools.register(new WebSearchTool({
@@ -455,7 +455,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     }));
   }
   if (cfg.tools.web.enable) {
-    tools.register(new WebFetchTool(cfg.tools.web.proxy));
+    tools.register(new WebFetchTool(cfg.tools.web.proxy, cfg.tools.web.allowPrivateAddresses));
     // web_search is always available — the default provider (DuckDuckGo) needs
     // no API key; keyed providers surface a config hint at call time if unset.
     tools.register(new WebSearchTool({

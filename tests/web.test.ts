@@ -3,16 +3,16 @@
  * WebSearchTool / WebFetchTool wired against a mocked global fetch.
  */
 
-import { describe, it, expect, afterEach } from "bun:test";
-import { decodeEntities, stripTags, extractReadable } from "../src/agent/tools/html.js";
+import { afterEach, describe, expect, it } from "bun:test";
+import { decodeEntities, extractReadable, stripTags } from "../src/agent/tools/html.js";
 import {
+  createSearchProvider,
+  parseBrave,
   parseDuckDuckGo,
   parseSearxng,
-  parseBrave,
   parseTavily,
-  createSearchProvider,
 } from "../src/agent/tools/search-providers.js";
-import { WebSearchTool, WebFetchTool } from "../src/agent/tools/web.js";
+import { WebFetchTool, WebSearchTool } from "../src/agent/tools/web.js";
 
 // ---------------------------------------------------------------------------
 // HTML utilities
@@ -66,7 +66,11 @@ describe("search parsers", () => {
       <a class="result__snippet">Everything dogs.</a>`;
     const r = parseDuckDuckGo(html);
     expect(r).toHaveLength(2);
-    expect(r[0]).toEqual({ title: "Cats Page", url: "https://example.com/cats", description: "All about cats." });
+    expect(r[0]).toEqual({
+      title: "Cats Page",
+      url: "https://example.com/cats",
+      description: "All about cats.",
+    });
     expect(r[1]!.url).toBe("https://example.org/dogs");
   });
 
@@ -76,7 +80,9 @@ describe("search parsers", () => {
   });
 
   it("parseBrave reads web.results and strips markup in description", () => {
-    const r = parseBrave({ web: { results: [{ title: "B", url: "https://b.com", description: "<b>bold</b> desc" }] } });
+    const r = parseBrave({
+      web: { results: [{ title: "B", url: "https://b.com", description: "<b>bold</b> desc" }] },
+    });
     expect(r[0]).toEqual({ title: "B", url: "https://b.com", description: "bold desc" });
   });
 
@@ -100,7 +106,9 @@ describe("createSearchProvider", () => {
   it("selects keyed and instance providers by name", () => {
     expect(createSearchProvider({ provider: "brave", apiKey: "k" }).id).toBe("brave");
     expect(createSearchProvider({ provider: "tavily", apiKey: "k" }).id).toBe("tavily");
-    expect(createSearchProvider({ provider: "searxng", baseUrl: "https://s.example" }).id).toBe("searxng");
+    expect(createSearchProvider({ provider: "searxng", baseUrl: "https://s.example" }).id).toBe(
+      "searxng",
+    );
   });
 });
 
@@ -114,7 +122,10 @@ afterEach(() => {
 });
 function mockFetch(body: string, contentType: string): void {
   globalThis.fetch = (async () =>
-    new Response(body, { status: 200, headers: { "content-type": contentType } })) as unknown as typeof fetch;
+    new Response(body, {
+      status: 200,
+      headers: { "content-type": contentType },
+    })) as unknown as typeof fetch;
 }
 
 describe("WebSearchTool (keyless DuckDuckGo)", () => {
@@ -140,7 +151,10 @@ describe("WebSearchTool (keyless DuckDuckGo)", () => {
 
 describe("WebFetchTool (scrape to markdown)", () => {
   it("scrapes HTML into markdown with a title heading", async () => {
-    mockFetch("<html><head><title>Doc</title></head><body><h1>Hello</h1><p>World</p></body></html>", "text/html");
+    mockFetch(
+      "<html><head><title>Doc</title></head><body><h1>Hello</h1><p>World</p></body></html>",
+      "text/html",
+    );
     const out = (await new WebFetchTool().execute({ url: "https://example.com" })) as string;
     expect(out).toContain("# Doc");
     expect(out).toContain("# Hello");
@@ -150,5 +164,28 @@ describe("WebFetchTool (scrape to markdown)", () => {
   it("rejects non-http schemes", async () => {
     const out = (await new WebFetchTool().execute({ url: "file:///etc/passwd" })) as string;
     expect(out).toContain("unsupported URL scheme");
+  });
+
+  it("blocks SSRF at private/metadata hosts before any fetch", async () => {
+    // If the guard fails, this fetch would run and throw a distinguishable error.
+    globalThis.fetch = (async () => {
+      throw new Error("fetch should not run for a blocked host");
+    }) as unknown as typeof fetch;
+    for (const url of [
+      "http://127.0.0.1/admin",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://[::1]/",
+    ]) {
+      const out = (await new WebFetchTool().execute({ url })) as string;
+      expect(out).toContain("refusing to fetch");
+    }
+  });
+
+  it("allows private hosts when allowPrivate is set", async () => {
+    mockFetch("<html><head><title>Local</title></head><body><p>ok</p></body></html>", "text/html");
+    const out = (await new WebFetchTool(null, true).execute({
+      url: "http://127.0.0.1/",
+    })) as string;
+    expect(out).toContain("# Local");
   });
 });
