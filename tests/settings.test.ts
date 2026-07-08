@@ -1,16 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventEmitter } from "node:events";
 
-import { ConfigSchema } from "../src/config/schema.js";
-import { loadConfig } from "../src/config/loader.js";
-import { SettingsController, maskKey } from "../src/config/settings.js";
+import type { KeyEvent, KeyboardIO } from "../src/cli/keyboard.js";
 import { runSettingsMenu } from "../src/cli/settings-menu.js";
-import type { KeyboardIO, KeyEvent } from "../src/cli/keyboard.js";
-import { SkillsLoader } from "../src/skills/index.js";
+import { loadConfig } from "../src/config/loader.js";
+import { ConfigSchema } from "../src/config/schema.js";
+import { SettingsController, maskKey } from "../src/config/settings.js";
 import { Session } from "../src/session/manager.js";
+import { SkillsLoader } from "../src/skills/index.js";
 
 let tmpDir: string;
 let configPath: string;
@@ -280,7 +280,11 @@ function scriptedKeyboardIO(steps: ScriptedKey[][]): { io: KeyboardIO; writes: s
   return { io, writes };
 }
 
-function makeMenuDeps(cfg: ReturnType<typeof ConfigSchema.parse>, cfgPath: string, workDir: string) {
+function makeMenuDeps(
+  cfg: ReturnType<typeof ConfigSchema.parse>,
+  cfgPath: string,
+  workDir: string,
+) {
   const controller = new SettingsController(cfg, cfgPath);
   const skillsLoader = new SkillsLoader(workDir, join(workDir, "no-builtin-skills"));
   const session = new Session({ key: "test" });
@@ -347,8 +351,8 @@ describe("runSettingsMenu", () => {
     const cfg = ConfigSchema.parse({});
     const deps = makeMenuDeps(cfg, configPath, tmpDir);
     const { io } = scriptedKeyboardIO([
-      downTimes(3).concat(ENTER), // top menu -> "Skills" (index 3), synchronous, no prompt
-      downTimes(4).concat(ENTER), // top menu -> "Usage" (index 4), synchronous, no prompt
+      downTimes(6).concat(ENTER), // top menu -> "Skills" (index 6), synchronous, no prompt
+      downTimes(7).concat(ENTER), // top menu -> "Usage" (index 7), synchronous, no prompt
       [ESC], // top menu -> back to chat
     ]);
 
@@ -360,7 +364,7 @@ describe("runSettingsMenu", () => {
     const cfg = ConfigSchema.parse({});
     const deps = makeMenuDeps(cfg, configPath, tmpDir);
     const { io } = scriptedKeyboardIO([
-      downTimes(5).concat(ENTER), // top menu -> "Advanced" (index 5)
+      downTimes(8).concat(ENTER), // top menu -> "Advanced" (index 8)
       chars("agents.defaults.maxTokens").concat(ENTER),
       chars("3000").concat(ENTER),
       [ESC],
@@ -369,5 +373,55 @@ describe("runSettingsMenu", () => {
     await runSettingsMenu({ ...deps, io });
 
     expect(cfg.agents.defaults.maxTokens).toBe(3000);
+  });
+
+  it("toggles a tool boolean via the Tools submenu", async () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.tools.web.enable).toBe(true);
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const { io } = scriptedKeyboardIO([
+      downTimes(3).concat(ENTER), // top menu -> "Tools" (index 3)
+      [ENTER], // Tools submenu -> "Web tools" (index 0) toggles it
+      [ESC], // leave Tools submenu
+      [ESC], // leave top menu
+    ]);
+
+    await runSettingsMenu({ ...deps, io });
+
+    expect(cfg.tools.web.enable).toBe(false);
+    const reloaded = loadConfig(configPath);
+    expect(reloaded.tools.web.enable).toBe(false);
+  });
+
+  it("sets the web search provider via the Tools submenu", async () => {
+    const cfg = ConfigSchema.parse({});
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const { io } = scriptedKeyboardIO([
+      downTimes(3).concat(ENTER), // top menu -> "Tools"
+      downTimes(1).concat(ENTER), // Tools -> "Web search provider" (index 1)
+      downTimes(2).concat(ENTER), // choice list -> "brave" (index 2)
+      [ESC], // leave Tools submenu
+      [ESC], // leave top menu
+    ]);
+
+    await runSettingsMenu({ ...deps, io });
+
+    expect(cfg.tools.web.search.provider).toBe("brave");
+  });
+
+  it("sets the API port via the API server submenu", async () => {
+    const cfg = ConfigSchema.parse({});
+    const deps = makeMenuDeps(cfg, configPath, tmpDir);
+    const { io } = scriptedKeyboardIO([
+      downTimes(4).concat(ENTER), // top menu -> "API server" (index 4)
+      downTimes(1).concat(ENTER), // API submenu -> "Port" (index 1)
+      chars("9100").concat(ENTER),
+      [ESC], // leave API submenu
+      [ESC], // leave top menu
+    ]);
+
+    await runSettingsMenu({ ...deps, io });
+
+    expect(cfg.api.port).toBe(9100);
   });
 });

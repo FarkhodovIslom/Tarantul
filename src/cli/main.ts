@@ -1,42 +1,53 @@
-
 import { existsSync, mkdirSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { join, resolve } from "node:path";
+import { SystemPromptCache, buildMessages } from "../agent/context.js";
+import { AgentLoop } from "../agent/loop.js";
+import { buildMemoryService } from "../agent/memory-setup.js";
+import { MemoryConsolidator, MemoryStoreRegistry } from "../agent/memory.js";
+import { AgentRunner } from "../agent/runner.js";
+import { CronTool } from "../agent/tools/cron.js";
 import {
-  styled, ansi, printResponse, printProgress, printWelcomeBanner,
-  StreamRenderer, ToolStatusRenderer, toolStatusLabel,
+  EditFileTool,
+  ListDirTool,
+  ReadFileTool,
+  WriteFileTool,
+} from "../agent/tools/filesystem.js";
+import { closeAllMcpServers, connectAllMcpServers } from "../agent/tools/mcp.js";
+import {
+  MemoryGetTool,
+  MemoryLinksTool,
+  type MemorySearchService,
+  MemorySearchTool,
+  MemoryWriteTool,
+} from "../agent/tools/memory.js";
+import { ToolRegistry } from "../agent/tools/registry.js";
+import { ExecTool } from "../agent/tools/shell.js";
+import { WebFetchTool, WebSearchTool } from "../agent/tools/web.js";
+import { recordTurnUsage } from "../agent/usage.js";
+import { MessageBus } from "../bus/queue.js";
+import { CommandRouter, registerBuiltinCommands } from "../command/index.js";
+import { getConfigPath, loadConfig, setConfigPath } from "../config/loader.js";
+import { getCliHistoryPath } from "../config/paths.js";
+import { getCronDir } from "../config/paths.js";
+import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
+import { SettingsController } from "../config/settings.js";
+import { CronService } from "../cron/service.js";
+import { createProvider } from "../providers/factory.js";
+import { SessionManager } from "../session/manager.js";
+import { BUILTIN_SKILLS_DIR, SkillsLoader } from "../skills/index.js";
+import { runOnboarding } from "./onboarding.js";
+import {
+  StreamRenderer,
+  ToolStatusRenderer,
+  ansi,
+  printProgress,
+  printResponse,
+  printWelcomeBanner,
+  styled,
+  toolStatusLabel,
 } from "./render.js";
 import { Repl, readStdin } from "./repl.js";
 import { runSettingsMenu } from "./settings-menu.js";
-import { loadConfig, setConfigPath, getConfigPath } from "../config/loader.js";
-import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
-import { SettingsController } from "../config/settings.js";
-import { getCliHistoryPath } from "../config/paths.js";
-import { createProvider } from "../providers/factory.js";
-import { SessionManager } from "../session/manager.js";
-import { ToolRegistry } from "../agent/tools/registry.js";
-import { ReadFileTool, WriteFileTool, EditFileTool, ListDirTool } from "../agent/tools/filesystem.js";
-import { ExecTool } from "../agent/tools/shell.js";
-import { WebFetchTool, WebSearchTool } from "../agent/tools/web.js";
-import { connectAllMcpServers, closeAllMcpServers } from "../agent/tools/mcp.js";
-import { AgentRunner } from "../agent/runner.js";
-import { buildMessages, SystemPromptCache } from "../agent/context.js";
-import { recordTurnUsage } from "../agent/usage.js";
-import { CommandRouter, registerBuiltinCommands, buildHelpText } from "../command/index.js";
-import { MemoryStoreRegistry, MemoryConsolidator } from "../agent/memory.js";
-import {
-  MemorySearchTool,
-  MemoryGetTool,
-  MemoryLinksTool,
-  MemoryWriteTool,
-  type MemorySearchService,
-} from "../agent/tools/memory.js";
-import { buildMemoryService } from "../agent/memory-setup.js";
-import { SkillsLoader, BUILTIN_SKILLS_DIR } from "../skills/index.js";
-import { getCronDir } from "../config/paths.js";
-import { AgentLoop } from "../agent/loop.js";
-import { MessageBus } from "../bus/queue.js";
-import { CronService } from "../cron/service.js";
-import { CronTool } from "../agent/tools/cron.js";
 
 import { AgentHook } from "../agent/hook.js";
 import type { AgentHookContext, ToolEvent } from "../agent/hook.js";
@@ -66,7 +77,9 @@ class ReplHook extends AgentHook {
     this.streamRenderer = new StreamRenderer(renderMarkdown);
   }
 
-  override wantsStreaming(): boolean { return true; }
+  override wantsStreaming(): boolean {
+    return true;
+  }
 
   override async onStream(_ctx: AgentHookContext, delta: string): Promise<void> {
     await this.streamRenderer.onDelta(delta);
@@ -83,7 +96,11 @@ class ReplHook extends AgentHook {
     this.toolStatus.start(label.running);
   }
 
-  override async onToolEnd(_ctx: AgentHookContext, tc: ToolCallRequest, event: ToolEvent): Promise<void> {
+  override async onToolEnd(
+    _ctx: AgentHookContext,
+    tc: ToolCallRequest,
+    event: ToolEvent,
+  ): Promise<void> {
     const label = toolStatusLabel(tc.name, tc.arguments);
     this.toolStatus.finish(label.done, event.status === "ok");
   }
@@ -192,15 +209,25 @@ async function cmdOnboard(args: ParsedArgs): Promise<void> {
     setConfigPath(abs);
   }
   const cfgPath = getConfigPath();
+  const ws = flagStr(args, "workspace", "w");
 
-  if (existsSync(cfgPath)) {
+  // Interactive terminal → run the guided wizard (provider → key → model).
+  // On an existing config we start from it so the user edits rather than resets.
+  const interactive = process.stdin.isTTY && process.stdout.isTTY && !flagBool(args, "no-input");
+  if (interactive) {
+    if (existsSync(cfgPath)) {
+      console.log(styled(`Reconfiguring existing config at ${cfgPath}`, ansi.dim));
+    }
+    const base = existsSync(cfgPath) ? load(cfgPath) : load();
+    if (ws) (base.agents.defaults as Record<string, unknown>)["workspace"] = ws;
+    await runOnboarding({ configPath: cfgPath, baseConfig: base });
+  } else if (existsSync(cfgPath)) {
     console.log(styled(`Config already exists at ${cfgPath}`, ansi.yellow));
     const cfg = load(cfgPath);
     saveConfig(cfg, cfgPath);
     console.log(styled(`✓ Config refreshed at ${cfgPath}`, ansi.green));
   } else {
     const cfg = load();
-    const ws = flagStr(args, "workspace", "w");
     if (ws) (cfg.agents.defaults as Record<string, unknown>)["workspace"] = ws;
     saveConfig(cfg, cfgPath);
     console.log(styled(`✓ Created config at ${cfgPath}`, ansi.green));
@@ -214,10 +241,7 @@ async function cmdOnboard(args: ParsedArgs): Promise<void> {
   }
 
   console.log(`\n${LOGO} tarantul is ready!`);
-  console.log("\nNext steps:");
-  console.log(`  1. Add your API key to ${styled(cfgPath, ansi.cyan)}`);
-  console.log("     Get one at: https://openrouter.ai/keys");
-  console.log(`  2. Chat: ${styled("tarantul agent", ansi.cyan)}`);
+  console.log(`Chat: ${styled("tarantul agent", ansi.cyan)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +263,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   if (!existsSync(wsPath)) mkdirSync(wsPath, { recursive: true });
 
   const host = hostOverride ?? cfg.api.host;
-  const port = portOverride ? parseInt(portOverride, 10) : cfg.api.port;
+  const port = portOverride ? Number.parseInt(portOverride, 10) : cfg.api.port;
   const timeoutSecs = cfg.api.timeout;
   const apiKey = cfg.api.apiKey || null;
   const modelName = cfg.agents.defaults.model;
@@ -255,23 +279,27 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   tools.register(new EditFileTool(wsPath, allowedDir));
   tools.register(new ListDirTool(wsPath, allowedDir));
   if (cfg.tools.exec.enable) {
-    tools.register(new ExecTool({
-      workingDir: wsPath,
-      timeout: cfg.tools.exec.timeout,
-      restrictToWorkspace: restrictWs,
-    }));
+    tools.register(
+      new ExecTool({
+        workingDir: wsPath,
+        timeout: cfg.tools.exec.timeout,
+        restrictToWorkspace: restrictWs,
+      }),
+    );
   }
   if (cfg.tools.web.enable) {
     tools.register(new WebFetchTool(cfg.tools.web.proxy, cfg.tools.web.allowPrivateAddresses));
     // web_search is always available — the default provider (DuckDuckGo) needs
     // no API key; keyed providers surface a config hint at call time if unset.
-    tools.register(new WebSearchTool({
-      provider: cfg.tools.web.search.provider,
-      apiKey: cfg.tools.web.search.apiKey || undefined,
-      baseUrl: cfg.tools.web.search.baseUrl || undefined,
-      maxResults: cfg.tools.web.search.maxResults,
-      proxy: cfg.tools.web.proxy,
-    }));
+    tools.register(
+      new WebSearchTool({
+        provider: cfg.tools.web.search.provider,
+        apiKey: cfg.tools.web.search.apiKey || undefined,
+        baseUrl: cfg.tools.web.search.baseUrl || undefined,
+        maxResults: cfg.tools.web.search.maxResults,
+        proxy: cfg.tools.web.proxy,
+      }),
+    );
   }
   // Memory tools — long-term memory search/read/write over per-session MEMORY.md
   // + daily logs + linked notes (hybrid keyword + embeddings when a key is present).
@@ -359,10 +387,18 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   const { startApiServer } = await import("../api/server.js");
   const server = startApiServer(
     {
-      host, port, timeoutSecs, modelName, apiKey, getSystemPrompt,
+      host,
+      port,
+      timeoutSecs,
+      modelName,
+      apiKey,
+      getSystemPrompt,
       wrapTurn: memoryService ? (key, fn) => memoryService!.runWithSession(key, fn) : null,
     },
-    runner, sessions, tools, runSpec,
+    runner,
+    sessions,
+    tools,
+    runSpec,
   );
 
   // Channel manager (Telegram/Slack/Discord) — only started if any channel is enabled
@@ -380,7 +416,12 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     console.log(styled("  Warning: API bound to all interfaces.", ansi.yellow));
   }
   if (!apiKey) {
-    console.log(styled("  Warning: No API key configured — anyone who can reach this port can use it. Set api.apiKey in your config.", ansi.yellow));
+    console.log(
+      styled(
+        "  Warning: No API key configured — anyone who can reach this port can use it. Set api.apiKey in your config.",
+        ansi.yellow,
+      ),
+    );
   }
   console.log();
   console.log(styled("Press Ctrl+C to stop.", ansi.dim));
@@ -426,6 +467,16 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     process.env["LOG_LEVEL"] = "silent";
   }
 
+  // First run: no config yet and an interactive terminal → guided setup wizard,
+  // so the user isn't dropped into a chat with no provider/key configured.
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    const cfgFile = configPath ? resolve(configPath) : getConfigPath();
+    if (!existsSync(cfgFile)) {
+      if (configPath) setConfigPath(cfgFile);
+      await runOnboarding({ configPath: cfgFile, baseConfig: loadConfig(cfgFile) });
+    }
+  }
+
   const cfg = loadRuntimeConfig(configPath, workspace);
   const wsPath = getWorkspacePathFromConfig(cfg);
   if (!existsSync(wsPath)) mkdirSync(wsPath, { recursive: true });
@@ -448,23 +499,27 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   tools.register(new EditFileTool(wsPath, allowedDir));
   tools.register(new ListDirTool(wsPath, allowedDir));
   if (cfg.tools.exec.enable) {
-    tools.register(new ExecTool({
-      workingDir: wsPath,
-      timeout: cfg.tools.exec.timeout,
-      restrictToWorkspace: restrictWs,
-    }));
+    tools.register(
+      new ExecTool({
+        workingDir: wsPath,
+        timeout: cfg.tools.exec.timeout,
+        restrictToWorkspace: restrictWs,
+      }),
+    );
   }
   if (cfg.tools.web.enable) {
     tools.register(new WebFetchTool(cfg.tools.web.proxy, cfg.tools.web.allowPrivateAddresses));
     // web_search is always available — the default provider (DuckDuckGo) needs
     // no API key; keyed providers surface a config hint at call time if unset.
-    tools.register(new WebSearchTool({
-      provider: cfg.tools.web.search.provider,
-      apiKey: cfg.tools.web.search.apiKey || undefined,
-      baseUrl: cfg.tools.web.search.baseUrl || undefined,
-      maxResults: cfg.tools.web.search.maxResults,
-      proxy: cfg.tools.web.proxy,
-    }));
+    tools.register(
+      new WebSearchTool({
+        provider: cfg.tools.web.search.provider,
+        apiKey: cfg.tools.web.search.apiKey || undefined,
+        baseUrl: cfg.tools.web.search.baseUrl || undefined,
+        maxResults: cfg.tools.web.search.maxResults,
+        proxy: cfg.tools.web.proxy,
+      }),
+    );
   }
   // Memory tools — same long-term memory suite as the gateway; this REPL is a
   // single session, so we bind it to `sessionId` in runTurn.
@@ -661,7 +716,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         loop: null,
       });
       if (resp) {
-        const asText = (resp.metadata?.["renderAs"] === "text");
+        const asText = resp.metadata?.["renderAs"] === "text";
         printResponse(resp.content, renderMarkdown && !asText, asText);
         continue;
       }

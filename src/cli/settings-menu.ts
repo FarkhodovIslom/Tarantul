@@ -1,4 +1,3 @@
-
 /**
  * Interactive `/settings` menu for the REPL: arrow keys to move, Enter to
  * select, Esc to go back/cancel. Owns stdin for its entire run (the caller
@@ -10,22 +9,23 @@
  * `Config` in place.
  */
 
-import { styled, ansi } from "./render.js";
+import { formatUsageSummary, getSessionUsage } from "../agent/usage.js";
 import {
-  beginKeyboardSession,
-  endKeyboardSession,
-  selectMenu,
-  promptText,
-  type KeyboardIO,
-} from "./keyboard.js";
-import {
+  type ProviderListEntry,
   type SettingsController,
   type SettingsResult,
-  type ProviderListEntry,
+  maskKey,
 } from "../config/settings.js";
-import type { SkillsLoader } from "../skills/index.js";
 import type { Session } from "../session/manager.js";
-import { getSessionUsage, formatUsageSummary } from "../agent/usage.js";
+import type { SkillsLoader } from "../skills/index.js";
+import {
+  type KeyboardIO,
+  beginKeyboardSession,
+  endKeyboardSession,
+  promptText,
+  selectMenu,
+} from "./keyboard.js";
+import { ansi, styled } from "./render.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +40,12 @@ export interface SettingsMenuOptions {
 }
 
 const REASONING_CHOICES = ["low", "medium", "high", "none"] as const;
+const SEARCH_PROVIDERS = ["duckduckgo", "searxng", "brave", "tavily"] as const;
+const RETRY_MODES = ["standard", "persistent"] as const;
+
+function onOff(v: unknown): string {
+  return v ? "on" : "off";
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -57,16 +63,30 @@ export async function runSettingsMenu(opts: SettingsMenuOptions): Promise<void> 
 async function menuLoop(opts: SettingsMenuOptions): Promise<void> {
   const { controller } = opts;
 
+  const g = (p: string): unknown => controller.getValue(p);
+
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const o = controller.overview();
     const choice = await selectMenu(
       [
         { label: "Model", hint: o.model },
-        { label: "Provider / API keys", hint: `${o.resolvedProvider ?? "none"} · key ${o.keyMasked}` },
+        {
+          label: "Provider / API keys",
+          hint: `${o.resolvedProvider ?? "none"} · key ${o.keyMasked}`,
+        },
         {
           label: "Generation",
           hint: `temp ${o.temperature} · max ${o.maxTokens} · ctx ${o.contextWindowTokens}`,
+        },
+        {
+          label: "Tools",
+          hint: `web ${g("tools.web.enable") ? "on" : "off"} · exec ${g("tools.exec.enable") ? "on" : "off"} · memory ${g("tools.memory.enable") ? "on" : "off"}`,
+        },
+        { label: "API server", hint: `${g("api.host")}:${g("api.port")}` },
+        {
+          label: "Agent",
+          hint: `tz ${g("agents.defaults.timezone")} · retry ${g("agents.defaults.providerRetryMode")}`,
         },
         { label: "Skills" },
         { label: "Usage" },
@@ -76,7 +96,7 @@ async function menuLoop(opts: SettingsMenuOptions): Promise<void> {
       { io: opts.io },
     );
 
-    if (choice === null || choice === 6) return; // Esc, or "Back to chat"
+    if (choice === null || choice === 9) return; // Esc, or "Back to chat"
 
     switch (choice) {
       case 0:
@@ -89,13 +109,268 @@ async function menuLoop(opts: SettingsMenuOptions): Promise<void> {
         await generationMenu(opts);
         break;
       case 3:
-        skillsView(opts);
+        await toolsMenu(opts);
         break;
       case 4:
-        usageView(opts);
+        await apiMenu(opts);
         break;
       case 5:
+        await agentMenu(opts);
+        break;
+      case 6:
+        skillsView(opts);
+        break;
+      case 7:
+        usageView(opts);
+        break;
+      case 8:
         await advancedMenu(opts);
+        break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared setter helpers (thin wrappers over the controller's validated
+// dotted get/set, so every friendly menu reuses schema validation)
+// ---------------------------------------------------------------------------
+
+/** Flip a boolean config leaf and report the result. */
+function toggleBool(opts: SettingsMenuOptions, path: string, label: string): void {
+  const next = !opts.controller.getValue(path);
+  printResult(
+    opts.io,
+    opts.controller.setValue(path, String(next)),
+    `${label} ${next ? "enabled" : "disabled"}.`,
+  );
+}
+
+/** Prompt for free text and write it to `path` (empty allowed). */
+async function setTextValue(
+  opts: SettingsMenuOptions,
+  path: string,
+  prompt: string,
+  label: string,
+): Promise<void> {
+  const raw = await promptText(prompt, { io: opts.io });
+  if (raw === null) return;
+  const trimmed = raw.trim();
+  printResult(
+    opts.io,
+    opts.controller.setValue(path, trimmed),
+    `${label} set to ${trimmed || "(empty)"}.`,
+  );
+}
+
+/** Prompt for a secret (masked) and write it without echoing the value. */
+async function setSecretValue(
+  opts: SettingsMenuOptions,
+  path: string,
+  prompt: string,
+  label: string,
+): Promise<void> {
+  const raw = await promptText(`${prompt} (masked, Esc to cancel)`, { io: opts.io, secure: true });
+  if (raw === null) return;
+  printResult(opts.io, opts.controller.setValue(path, raw.trim()), `${label} updated.`);
+}
+
+/** Pick one of `choices` and write it to `path`. */
+async function setChoiceValue(
+  opts: SettingsMenuOptions,
+  path: string,
+  choices: readonly string[],
+  label: string,
+): Promise<void> {
+  const idx = await selectMenu(
+    choices.map((c) => ({ label: c })),
+    { io: opts.io },
+  );
+  if (idx === null) return;
+  const v = choices[idx]!;
+  printResult(opts.io, opts.controller.setValue(path, v), `${label} set to ${v}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+async function toolsMenu(opts: SettingsMenuOptions): Promise<void> {
+  const { controller, io } = opts;
+  const g = (p: string): unknown => controller.getValue(p);
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    log(io, `\n${styled("Tools", ansi.bold)}`);
+    const choice = await selectMenu(
+      [
+        { label: "Web tools", hint: onOff(g("tools.web.enable")) },
+        { label: "Web search provider", hint: String(g("tools.web.search.provider")) },
+        { label: "Web search API key", hint: maskKey(String(g("tools.web.search.apiKey") ?? "")) },
+        { label: "SearXNG base URL", hint: String(g("tools.web.search.baseUrl")) || "(not set)" },
+        { label: "Allow private web addresses", hint: onOff(g("tools.web.allowPrivateAddresses")) },
+        { label: "Shell (exec)", hint: onOff(g("tools.exec.enable")) },
+        { label: "Shell timeout (s)", hint: String(g("tools.exec.timeout")) },
+        { label: "Memory", hint: onOff(g("tools.memory.enable")) },
+        { label: "Restrict tools to workspace", hint: onOff(g("tools.restrictToWorkspace")) },
+        { label: "Back" },
+      ],
+      { io },
+    );
+    if (choice === null || choice === 9) return;
+
+    switch (choice) {
+      case 0:
+        toggleBool(opts, "tools.web.enable", "Web tools");
+        break;
+      case 1:
+        await setChoiceValue(
+          opts,
+          "tools.web.search.provider",
+          SEARCH_PROVIDERS,
+          "Search provider",
+        );
+        break;
+      case 2:
+        await setSecretValue(
+          opts,
+          "tools.web.search.apiKey",
+          "Enter web search API key (Brave/Tavily)",
+          "Search API key",
+        );
+        break;
+      case 3:
+        await setTextValue(
+          opts,
+          "tools.web.search.baseUrl",
+          "Enter SearXNG base URL (Esc to cancel):",
+          "SearXNG base URL",
+        );
+        break;
+      case 4:
+        toggleBool(opts, "tools.web.allowPrivateAddresses", "Private web addresses");
+        break;
+      case 5:
+        toggleBool(opts, "tools.exec.enable", "Shell (exec)");
+        break;
+      case 6: {
+        const n = await promptNumber(opts, "Enter shell timeout in seconds:");
+        if (n !== null)
+          printResult(
+            io,
+            controller.setValue("tools.exec.timeout", String(n)),
+            `Shell timeout set to ${n}s.`,
+          );
+        break;
+      }
+      case 7:
+        toggleBool(opts, "tools.memory.enable", "Memory");
+        break;
+      case 8:
+        toggleBool(opts, "tools.restrictToWorkspace", "Restrict-to-workspace");
+        break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// API server
+// ---------------------------------------------------------------------------
+
+async function apiMenu(opts: SettingsMenuOptions): Promise<void> {
+  const { controller, io } = opts;
+  const g = (p: string): unknown => controller.getValue(p);
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    log(io, `\n${styled("API server", ansi.bold)}`);
+    const choice = await selectMenu(
+      [
+        { label: "Host", hint: String(g("api.host")) },
+        { label: "Port", hint: String(g("api.port")) },
+        { label: "Bearer API key", hint: maskKey(String(g("api.apiKey") ?? "")) },
+        { label: "Back" },
+      ],
+      { io },
+    );
+    if (choice === null || choice === 3) return;
+
+    switch (choice) {
+      case 0:
+        await setTextValue(opts, "api.host", "Enter API host (e.g. 127.0.0.1):", "API host");
+        break;
+      case 1: {
+        const n = await promptNumber(opts, "Enter API port (1-65535):");
+        if (n !== null)
+          printResult(io, controller.setValue("api.port", String(n)), `API port set to ${n}.`);
+        break;
+      }
+      case 2:
+        await setSecretValue(
+          opts,
+          "api.apiKey",
+          "Enter the bearer token clients must send",
+          "Bearer API key",
+        );
+        break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agent (misc defaults)
+// ---------------------------------------------------------------------------
+
+async function agentMenu(opts: SettingsMenuOptions): Promise<void> {
+  const { controller, io } = opts;
+  const g = (p: string): unknown => controller.getValue(p);
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    log(io, `\n${styled("Agent", ansi.bold)}`);
+    const choice = await selectMenu(
+      [
+        { label: "Timezone", hint: String(g("agents.defaults.timezone")) },
+        { label: "Provider retry mode", hint: String(g("agents.defaults.providerRetryMode")) },
+        { label: "Max tool result chars", hint: String(g("agents.defaults.maxToolResultChars")) },
+        {
+          label: "Context block limit",
+          hint: String(g("agents.defaults.contextBlockLimit") ?? "(none)"),
+        },
+        { label: "Back" },
+      ],
+      { io },
+    );
+    if (choice === null || choice === 4) return;
+
+    switch (choice) {
+      case 0:
+        await setTextValue(
+          opts,
+          "agents.defaults.timezone",
+          "Enter IANA timezone (e.g. UTC, Asia/Tashkent):",
+          "Timezone",
+        );
+        break;
+      case 1:
+        await setChoiceValue(opts, "agents.defaults.providerRetryMode", RETRY_MODES, "Retry mode");
+        break;
+      case 2: {
+        const n = await promptNumber(opts, "Enter max tool result chars:");
+        if (n !== null)
+          printResult(
+            io,
+            controller.setValue("agents.defaults.maxToolResultChars", String(n)),
+            `Max tool result chars set to ${n}.`,
+          );
+        break;
+      }
+      case 3:
+        await setTextValue(
+          opts,
+          "agents.defaults.contextBlockLimit",
+          "Enter context block limit (blank or 'null' for none):",
+          "Context block limit",
+        );
         break;
     }
   }
@@ -145,7 +420,10 @@ async function providerMenu(opts: SettingsMenuOptions): Promise<void> {
   const o = controller.overview();
 
   log(io, `\n${styled("Provider / API keys", ansi.bold)}`);
-  log(io, `Routing: ${o.provider}${o.provider === "auto" ? ` (resolved: ${o.resolvedProvider ?? "none"})` : ""}`);
+  log(
+    io,
+    `Routing: ${o.provider}${o.provider === "auto" ? ` (resolved: ${o.resolvedProvider ?? "none"})` : ""}`,
+  );
 
   const action = await selectMenu(
     [
@@ -215,12 +493,14 @@ async function generationMenu(opts: SettingsMenuOptions): Promise<void> {
     }
     case 2: {
       const n = await promptNumber(opts, "Enter context window tokens:");
-      if (n !== null) printResult(io, controller.setContextWindow(n), `Context window set to ${n}.`);
+      if (n !== null)
+        printResult(io, controller.setContextWindow(n), `Context window set to ${n}.`);
       break;
     }
     case 3: {
       const n = await promptNumber(opts, "Enter max tool iterations:");
-      if (n !== null) printResult(io, controller.setMaxToolIterations(n), `Max tool iterations set to ${n}.`);
+      if (n !== null)
+        printResult(io, controller.setMaxToolIterations(n), `Max tool iterations set to ${n}.`);
       break;
     }
     case 4: {
@@ -266,9 +546,10 @@ function skillsView(opts: SettingsMenuOptions): void {
     return;
   }
   for (const s of all) {
-    const flags = [available.has(s.name) ? null : "unavailable", always.has(s.name) ? "always" : null].filter(
-      Boolean,
-    );
+    const flags = [
+      available.has(s.name) ? null : "unavailable",
+      always.has(s.name) ? "always" : null,
+    ].filter(Boolean);
     const flagStr = flags.length ? ` [${flags.join(", ")}]` : "";
     log(io, `  ${s.name.padEnd(24)} ${s.source}${flagStr}`);
   }
@@ -291,9 +572,12 @@ async function advancedMenu(opts: SettingsMenuOptions): Promise<void> {
   const { controller, io } = opts;
 
   log(io, `\n${styled("Advanced", ansi.bold)}`);
-  const path = await promptText("Enter a dotted config path (e.g. agents.defaults.temperature), Esc to cancel:", {
-    io,
-  });
+  const path = await promptText(
+    "Enter a dotted config path (e.g. agents.defaults.temperature), Esc to cancel:",
+    {
+      io,
+    },
+  );
   if (path === null) return;
   const trimmedPath = path.trim();
   if (!trimmedPath) return;
@@ -305,5 +589,9 @@ async function advancedMenu(opts: SettingsMenuOptions): Promise<void> {
   const trimmedValue = value.trim();
   if (!trimmedValue) return;
 
-  printResult(io, controller.setValue(trimmedPath, trimmedValue), `${trimmedPath} = ${trimmedValue}`);
+  printResult(
+    io,
+    controller.setValue(trimmedPath, trimmedValue),
+    `${trimmedPath} = ${trimmedValue}`,
+  );
 }
