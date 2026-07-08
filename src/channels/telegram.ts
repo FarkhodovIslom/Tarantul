@@ -442,7 +442,7 @@ export class TelegramChannel extends BaseChannel {
     this._startTyping(chatId);
 
     // Add reaction (best effort)
-    const reactEmoji = (this.config["reactEmoji"] as string | undefined) ?? "👀";
+    const reactEmoji = (this.config["reactEmoji"] as string | undefined) ?? "🕷️";
     if (reactEmoji) {
       this._bot?.api.setMessageReaction(parseInt(chatId, 10), message.message_id, [
         { type: "emoji", emoji: reactEmoji as never },

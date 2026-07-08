@@ -179,7 +179,7 @@ export class DiscordChannel extends BaseChannel {
     };
 
     // Read receipt emoji (best effort)
-    const emoji = (this.config["readReceiptEmoji"] as string | undefined) ?? "👀";
+    const emoji = (this.config["readReceiptEmoji"] as string | undefined) ?? "🕷️";
     if (emoji) {
       message.react(emoji).catch(() => { /* ignore */ });
     }
