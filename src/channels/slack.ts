@@ -214,7 +214,11 @@ export class SlackChannel extends BaseChannel {
       senderId,
       chatId,
       content: text,
-      metadata: { slack: { event: ev, thread_ts: threadTs, channel_type: "channel" } },
+      metadata: {
+        slack: { event: ev, thread_ts: threadTs, channel_type: "channel" },
+        is_group: true,
+        sender_name: senderId,
+      },
       ...(sessionKey != null ? { sessionKeyOverride: sessionKey } : {}),
     });
   }
@@ -256,7 +260,11 @@ export class SlackChannel extends BaseChannel {
       senderId,
       chatId,
       content: cleaned,
-      metadata: { slack: { event, thread_ts: threadTs, channel_type: channelType } },
+      metadata: {
+        slack: { event, thread_ts: threadTs, channel_type: channelType },
+        is_group: channelType !== "im",
+        sender_name: senderId,
+      },
       ...(sessionKey != null ? { sessionKeyOverride: sessionKey } : {}),
     });
   }

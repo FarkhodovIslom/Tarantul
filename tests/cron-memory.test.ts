@@ -320,6 +320,15 @@ describe("MemoryStore", () => {
     expect(store.readLongTerm()).toContain("cats are great");
   });
 
+  it("writeLongTerm keeps a .bak of the previous version", () => {
+    const store = new MemoryStore(tmpDir);
+    store.writeLongTerm("version one");
+    store.writeLongTerm("version two");
+    expect(store.readLongTerm()).toBe("version two");
+    const bak = readFileSync(join(tmpDir, "memory", "MEMORY.md.bak"), "utf-8");
+    expect(bak).toBe("version one");
+  });
+
   it("appendHistory creates and appends to HISTORY.md", () => {
     const store = new MemoryStore(tmpDir);
     store.appendHistory("[2025-01-01 09:00] USER: hello");
@@ -383,6 +392,43 @@ describe("MemoryStore", () => {
 
     const memory = store.readLongTerm();
     expect(memory).toContain("consolidation");
+  });
+
+  it("consolidate keeps MEMORY.md when memory_update is drastically truncated", async () => {
+    const store = new MemoryStore(tmpDir);
+    const existing = `# Memory\n${"Fact: important durable knowledge.\n".repeat(30)}`;
+    store.writeLongTerm(existing);
+
+    const mockProvider = {
+      generation: { temperature: 0.7, maxTokens: 4096, reasoningEffort: null },
+      getDefaultModel: () => "mock",
+      chatWithRetry: async () => ({
+        content: null,
+        toolCalls: [
+          {
+            id: "tc1",
+            name: "save_memory",
+            arguments: {
+              history_entry: "[2025-01-01 10:00] USER: hello",
+              memory_update: "(unchanged)",
+            },
+          },
+        ],
+        finishReason: "tool_calls",
+        usage: {},
+      }),
+    };
+
+    const ok = await store.consolidate(
+      [{ role: "user", content: "hello", timestamp: "2025-01-01T10:00:00" }],
+      mockProvider as never,
+      "mock",
+    );
+    expect(ok).toBe(true);
+
+    // The suspicious full rewrite is rejected; the daily entry still lands.
+    expect(store.readLongTerm()).toBe(existing);
+    expect(readFileSync(store.dailyLogPath(), "utf-8")).toContain("hello");
   });
 
   it("consolidate writes atomic notes with wikilinks", async () => {

@@ -4,6 +4,7 @@ import {
   readFileSync,
   writeFileSync,
   appendFileSync,
+  copyFileSync,
   readdirSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -158,6 +159,8 @@ export class MemoryStore {
   private consecutiveFailures = 0;
 
   private static readonly MAX_FAILURES_BEFORE_RAW_ARCHIVE = 3;
+  /** Below this size a MEMORY.md rewrite may legitimately shrink a lot. */
+  private static readonly MEMORY_GUARD_MIN_CHARS = 500;
 
   /**
    * @param workspace workspace root.
@@ -177,6 +180,16 @@ export class MemoryStore {
   }
 
   writeLongTerm(content: string): void {
+    // Keep one rotating backup of the previous version so a bad full rewrite
+    // (e.g. an LLM returning a truncated MEMORY.md) is always recoverable.
+    // `.bak` is not a `.md` file, so the search index never picks it up.
+    if (existsSync(this.memoryFile)) {
+      try {
+        copyFileSync(this.memoryFile, `${this.memoryFile}.bak`);
+      } catch {
+        /* backup is best-effort */
+      }
+    }
     writeFileSync(this.memoryFile, content, "utf-8");
   }
 
@@ -356,7 +369,14 @@ export class MemoryStore {
 
       this.appendDaily(entry);
       if (parsed.memoryUpdate !== currentMemory) {
-        this.writeLongTerm(parsed.memoryUpdate);
+        if (MemoryStore.looksTruncated(currentMemory, parsed.memoryUpdate)) {
+          logger.warn(
+            { before: currentMemory.length, after: parsed.memoryUpdate.length },
+            "Memory consolidation: memory_update suspiciously short; keeping existing MEMORY.md",
+          );
+        } else {
+          this.writeLongTerm(parsed.memoryUpdate);
+        }
       }
       for (const note of parsed.notes) {
         try {
@@ -376,6 +396,19 @@ export class MemoryStore {
       logger.error({ err }, "Memory consolidation failed");
       return this._failOrRawArchive(messages);
     }
+  }
+
+  /**
+   * True when a proposed MEMORY.md rewrite lost more than half of a
+   * non-trivial file — the signature of a model returning a truncated or
+   * placeholder "update" (e.g. "(unchanged)") instead of the full curated
+   * index it was asked for. Small files are exempt: legitimate rewrites can
+   * shrink those substantially.
+   */
+  private static looksTruncated(current: string, updated: string): boolean {
+    const cur = current.trim().length;
+    if (cur < MemoryStore.MEMORY_GUARD_MIN_CHARS) return false;
+    return updated.trim().length < cur / 2;
   }
 
   private _failOrRawArchive(messages: Record<string, unknown>[]): boolean {

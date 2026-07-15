@@ -64,6 +64,17 @@ function containsUnsafeSubstitution(cmd: string): boolean {
   return /\$\(|`|<\(|>\(/.test(cmd);
 }
 
+function containsVariableExpansion(cmd: string): boolean {
+  // Variable expansion smuggles a path past the static scan the same way
+  // substitution does: `cat $HOME/.tarantul/config.json` never contains a
+  // literal absolute path. It also can't be resolved against process.env,
+  // because a variable may be assigned inline in the same command
+  // (`X=/etc; cat $X/passwd`) — so block it outright, same policy as above.
+  // Special parameters ($1, $?, $$, …) are left alone: they can't name a
+  // path chosen by the model, and blocking them would break common awk use.
+  return /\$[{A-Za-z_]/.test(cmd);
+}
+
 /** True if `resolved` is `dirResolved` itself or strictly inside it. */
 function isWithinDir(resolved: string, dirResolved: string): boolean {
   return resolved === dirResolved || resolved.startsWith(dirResolved + sep);
@@ -230,6 +241,9 @@ export class ExecTool extends Tool {
           "Error: Command blocked by safety guard " +
           "(command/process substitution is not allowed with workspace restriction enabled)"
         );
+      }
+      if (containsVariableExpansion(command)) {
+        return "Error: Command blocked by safety guard (variable expansion is not allowed with workspace restriction enabled)";
       }
 
       const cwdResolved = resolve(cwd);

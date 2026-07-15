@@ -435,6 +435,7 @@ export class TelegramChannel extends BaseChannel {
       username: user.username,
       first_name: user.first_name,
       is_group: message.chat.type !== "private",
+      sender_name: user.first_name ?? user.username ?? String(user.id),
       message_thread_id: msgAny["message_thread_id"],
     };
 

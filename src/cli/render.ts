@@ -146,60 +146,26 @@ function inlineMarkdown(text: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Spider mascot art for the REPL welcome banner, from SPIDER.txt. Solid
- * block body (▒/█) — no legs, no gap between glyphs.
+ * Spider mascot art for the REPL welcome banner.
  */
 const SPIDER_ART_LINES = [
-  "                                  ▒▒                  ▒▒",
-  "                                ▒▒██▒▒              ▒▒██▒▒",
-  "                                ▒▒██▒▒              ▒▒██▒▒",
-  "                            ▒▒  ▒▒██▒▒              ▒▒██▒▒  ▒▒",
-  "                          ▒▒██▒▒▒▒██▒▒              ▒▒██▒▒▒▒██▒▒",
-  "                          ▒▒██▒▒▒▒▒▒██▒▒  ▒▒  ▒▒  ▒▒██▒▒▒▒▒▒██▒▒",
-  "                            ▒▒██▒▒▒▒██▒▒▒▒██▒▒██▒▒▒▒██▒▒▒▒██▒▒",
-  "                            ▒▒██▒▒▒▒██▒▒▒▒██▒▒██▒▒▒▒██▒▒▒▒██▒▒",
-  "                            ▒▒██▒▒▒▒▒▒██▒▒██████▒▒██▒▒▒▒▒▒██▒▒",
-  "                              ▒▒██▒▒▒▒▒▒██████████▒▒▒▒▒▒██▒▒",
-  "                                ▒▒██████████████████████▒▒",
-  "                                  ▒▒▒▒▒▒██████████▒▒▒▒▒▒",
-  "                                ▒▒██████▒▒██████▒▒██████▒▒",
-  "                              ▒▒██▒▒▒▒▒▒██████████▒▒▒▒▒▒██▒▒",
-  "                            ▒▒██▒▒▒▒▒▒██████████████▒▒▒▒▒▒██▒▒",
-  "                            ▒▒██▒▒▒▒██▒▒██████████▒▒██▒▒▒▒██▒▒",
-  "                          ▒▒██▒▒▒▒██▒▒████▒▒▒▒▒▒████▒▒██▒▒▒▒██▒▒",
-  "                          ▒▒██▒▒▒▒██▒▒██████▒▒██████▒▒██▒▒▒▒██▒▒",
-  "                          ▒▒██▒▒▒▒██▒▒██████▒▒██████▒▒██▒▒▒▒██▒▒",
-  "                            ▒▒▒▒▒▒██▒▒████▒▒▒▒▒▒████▒▒██▒▒▒▒▒▒",
-  "                              ▒▒██▒▒  ▒▒██████████▒▒  ▒▒██▒▒",
-  "                              ▒▒██▒▒    ▒▒██████▒▒    ▒▒██▒▒",
-  "                              ▒▒██▒▒      ▒▒██▒▒      ▒▒██▒▒",
-  "                              ▒▒██▒▒        ▒▒        ▒▒██▒▒",
-  "                                ▒▒                      ▒▒",
+  "       />    </",
+  "      //      \\\\",
+  " </   \\\\  __  //   />",
+  "  \\\\___\\\\(oo)//___//",
+  "   `---.X{II}X.---'",
+  "______//=/\\/\\=\\\\_____",
+  "`-----/| =  = |\\-----'",
+  "     //\\ =\\/= /\\\\",
+  "    ((  `-..-'  ))",
+  "     \\)        (/",
+  ""
 ];
 
-/** Colorize one line of the spider glyph: ▒ outline dim, █ fill cyan. */
+/** Colorize one line of the spider art (rendered as cyan). */
 function colorizeSpiderLine(line: string): string {
   if (!isColorSupported()) return line;
-  let out = "";
-  let i = 0;
-  while (i < line.length) {
-    const ch = line[i]!;
-    if (ch === "█") {
-      let j = i;
-      while (j < line.length && line[j] === "█") j++;
-      out += styled(line.slice(i, j), ansi.cyan);
-      i = j;
-    } else if (ch === "▒") {
-      let j = i;
-      while (j < line.length && line[j] === "▒") j++;
-      out += styled(line.slice(i, j), ansi.dim);
-      i = j;
-    } else {
-      out += ch;
-      i++;
-    }
-  }
-  return out;
+  return styled(line, ansi.cyan);
 }
 
 /** Print the interactive REPL's welcome screen: mascot art + name/version/model + hint. */

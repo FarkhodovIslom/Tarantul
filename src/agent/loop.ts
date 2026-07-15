@@ -38,6 +38,19 @@ interface TurnSpec {
   cron?: boolean;
 }
 
+/**
+ * In group chats, multiple people share one session and one "user" role, so
+ * the model can't tell who said what across turns. Channels flag such
+ * messages via `metadata.is_group` + `metadata.sender_name`; prefix the
+ * stored/sent content so history stays attributable per-speaker.
+ */
+function withSenderLabel(msg: InboundMessage): string {
+  if (!msg.metadata?.["is_group"]) return msg.content;
+  const name = msg.metadata["sender_name"];
+  if (typeof name !== "string" || !name) return msg.content;
+  return `[${name}]: ${msg.content}`;
+}
+
 export class AgentLoop {
   private readonly bus: MessageBus;
   private readonly runner: AgentRunner;
@@ -108,7 +121,7 @@ export class AgentLoop {
       channel: msg.channel,
       chatId: msg.chatId,
       key: deriveSessionKey(msg),
-      userMessage: msg.content,
+      userMessage: withSenderLabel(msg),
       media: msg.media ?? [],
       deliver: true,
     });

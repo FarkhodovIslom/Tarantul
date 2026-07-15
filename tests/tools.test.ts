@@ -112,6 +112,36 @@ describe("ExecTool", () => {
   });
 });
 
+describe("ExecTool — restrictToWorkspace guard", () => {
+  const WS = join(tmpdir(), `tarantul-exec-guard-${Date.now()}`);
+  mkdirSync(WS, { recursive: true });
+  const tool = new ExecTool({ restrictToWorkspace: true, workingDir: WS });
+
+  it("blocks $VAR variable expansion", async () => {
+    const result = await tool.execute({ command: "cat $HOME/.tarantul/config.json" });
+    expect(String(result)).toContain("blocked");
+    expect(String(result)).toContain("variable expansion");
+  });
+
+  it("blocks ${VAR} variable expansion", async () => {
+    const result = await tool.execute({ command: "cat ${HOME}/.tarantul/config.json" });
+    expect(String(result)).toContain("blocked");
+    expect(String(result)).toContain("variable expansion");
+  });
+
+  it("allows benign in-workspace commands", async () => {
+    const result = await tool.execute({ command: "echo hello" });
+    expect(String(result)).toContain("hello");
+    expect(String(result)).not.toContain("blocked");
+  });
+
+  it("leaves special parameters like awk's $1 alone", async () => {
+    const result = await tool.execute({ command: "echo 'a b' | awk '{print $2}'" });
+    expect(String(result)).toContain("b");
+    expect(String(result)).not.toContain("blocked");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tool base — castParams / validateParams (via concrete subclass)
 // ---------------------------------------------------------------------------

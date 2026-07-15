@@ -27,6 +27,13 @@ const OPENAI_DEFAULT_BASE = "https://api.openai.com/v1";
 const GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const VOYAGE_DEFAULT_BASE = "https://api.voyageai.com/v1";
 
+/**
+ * Per-request timeout. Reindex and memory_search both await these fetches on
+ * the agent's turn, so a hung embeddings endpoint must fail fast (callers
+ * degrade to keyword-only) rather than stall the turn indefinitely.
+ */
+const EMBED_TIMEOUT_MS = 30_000;
+
 function trimBase(base: string): string {
   return base.replace(/\/+$/, "");
 }
@@ -59,6 +66,7 @@ class OpenAICompatEmbeddings implements EmbeddingProvider {
         authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({ model: this.model, input: texts }),
+      signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
     });
     if (!res.ok) {
       throw new Error(`embeddings HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -93,13 +101,15 @@ class GeminiEmbeddings implements EmbeddingProvider {
   async embed(texts: string[]): Promise<number[][]> {
     if (!texts.length) return [];
     const modelPath = this.model.startsWith("models/") ? this.model : `models/${this.model}`;
-    const url = `${this.base}/${modelPath}:batchEmbedContents?key=${encodeURIComponent(this.apiKey)}`;
+    // Key goes in a header, not the URL — query strings end up in proxy/server logs.
+    const url = `${this.base}/${modelPath}:batchEmbedContents`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify({
         requests: texts.map((t) => ({ model: modelPath, content: { parts: [{ text: t }] } })),
       }),
+      signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
     });
     if (!res.ok) {
       throw new Error(`gemini embeddings HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

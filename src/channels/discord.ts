@@ -175,6 +175,7 @@ export class DiscordChannel extends BaseChannel {
       user_id: message.author.id,
       username: message.author.username,
       is_group: isGroup,
+      sender_name: message.author.username,
       guild_id: message.guildId ?? null,
     };
 
