@@ -13,6 +13,8 @@ import {
   isColorSupported,
   printResponse,
   toolStatusLabel,
+  toolCallLabel,
+  displayWidth,
   ToolStatusRenderer,
 } from "../src/cli/render.js";
 import type { CommandContext } from "../src/command/router.js";
@@ -581,6 +583,49 @@ describe("toolStatusLabel", () => {
     const label = toolStatusLabel("", {});
     expect(label.running).toBe("Tool");
     expect(label.done).toBe("Tool done");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toolCallLabel / displayWidth
+// ---------------------------------------------------------------------------
+
+describe("toolCallLabel", () => {
+  it("renders exec with its command", () => {
+    expect(toolCallLabel("exec", { command: "git status" })).toBe("exec(git status)");
+  });
+
+  it("renders file tools with the path basename", () => {
+    expect(toolCallLabel("read_file", { path: "/a/b/main.ts" })).toBe("read_file(main.ts)");
+    expect(toolCallLabel("list_dir", { path: "/Users/x/Desktop" })).toBe("list_dir(Desktop)");
+  });
+
+  it("renders search tools with the query", () => {
+    expect(toolCallLabel("web_search", { query: "bun sqlite" })).toBe("web_search(bun sqlite)");
+    expect(toolCallLabel("memory_search", { query: "sina" })).toBe("memory_search(sina)");
+  });
+
+  it("falls back to the bare name for unknown tools or missing args", () => {
+    expect(toolCallLabel("custom_tool", {})).toBe("custom_tool");
+    expect(toolCallLabel("exec", {})).toBe("exec");
+  });
+
+  it("truncates long commands", () => {
+    const label = toolCallLabel("exec", { command: `echo ${"x".repeat(100)}` });
+    expect(label).toContain("…");
+    expect(label.length).toBeLessThan(60);
+  });
+});
+
+describe("displayWidth", () => {
+  it("counts ASCII as 1 column and ignores ANSI codes", () => {
+    expect(displayWidth("hello")).toBe(5);
+    expect(displayWidth("\x1b[1mhello\x1b[0m")).toBe(5);
+  });
+
+  it("counts emoji as 2 columns, skipping variation selectors", () => {
+    expect(displayWidth("🕷️")).toBe(2);
+    expect(displayWidth("a🕷️b")).toBe(4);
   });
 });
 

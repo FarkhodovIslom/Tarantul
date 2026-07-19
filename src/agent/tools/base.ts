@@ -7,6 +7,22 @@ export interface ToolSchema {
   };
 }
 
+/** An action a safety guard blocked, offered to the user for approval. */
+export interface PermissionRequest {
+  /** Tool asking (e.g. "exec", "read_file"). */
+  tool: string;
+  /** What runs if approved: the command line or the resolved path. */
+  action: string;
+  /** Which guard blocked it (human-readable). */
+  reason: string;
+}
+
+/**
+ * Asks the user to approve a guard-blocked action. Wired only by interactive
+ * front ends (the CLI REPL); when absent, guards hard-deny as before.
+ */
+export type AskPermission = (req: PermissionRequest) => Promise<boolean>;
+
 // ---------------------------------------------------------------------------
 // Parameter casting / validation helpers
 // ---------------------------------------------------------------------------

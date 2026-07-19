@@ -1,6 +1,6 @@
 import { delimiter, resolve, sep } from "node:path";
 import { platform } from "node:os";
-import { Tool } from "./base.js";
+import { Tool, type AskPermission } from "./base.js";
 import { PROVIDERS } from "../../providers/registry.js";
 
 const IS_WINDOWS = platform() === "win32";
@@ -91,6 +91,7 @@ export class ExecTool extends Tool {
   private readonly allowPatterns: RegExp[];
   private readonly restrictToWorkspace: boolean;
   private readonly pathAppend: string;
+  private readonly askPermission: AskPermission | null;
 
   constructor(opts: {
     timeout?: number;
@@ -99,6 +100,7 @@ export class ExecTool extends Tool {
     allowPatterns?: RegExp[];
     restrictToWorkspace?: boolean;
     pathAppend?: string;
+    askPermission?: AskPermission;
   } = {}) {
     super();
     this.timeout = opts.timeout ?? 60;
@@ -107,6 +109,7 @@ export class ExecTool extends Tool {
     this.allowPatterns = opts.allowPatterns ?? [];
     this.restrictToWorkspace = opts.restrictToWorkspace ?? false;
     this.pathAppend = opts.pathAppend ?? "";
+    this.askPermission = opts.askPermission ?? null;
   }
 
   readonly parameters = {
@@ -130,7 +133,19 @@ export class ExecTool extends Tool {
     const timeoutSec = Math.min(Number(params["timeout"] ?? this.timeout), MAX_TIMEOUT);
 
     const guardError = this.guardCommand(command, workingDir);
-    if (guardError) return guardError;
+    if (guardError) {
+      // With an interactive asker wired, a guard block becomes a question to
+      // the user instead of a hard deny; approval runs the command as-is.
+      if (!this.askPermission) return guardError;
+      const approved = await this.askPermission({
+        tool: this.name,
+        action: command,
+        reason: guardError,
+      });
+      if (!approved) {
+        return "Error: The user denied permission to run this command.";
+      }
+    }
 
     const env = buildChildEnv(this.pathAppend);
 

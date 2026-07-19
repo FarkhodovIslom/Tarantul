@@ -5,6 +5,7 @@ import { AgentLoop } from "../agent/loop.js";
 import { buildMemoryService } from "../agent/memory-setup.js";
 import { MemoryConsolidator, MemoryStoreRegistry } from "../agent/memory.js";
 import { AgentRunner } from "../agent/runner.js";
+import type { AskPermission } from "../agent/tools/base.js";
 import { CronTool } from "../agent/tools/cron.js";
 import {
   EditFileTool,
@@ -44,7 +45,7 @@ import {
   printResponse,
   printWelcomeBanner,
   styled,
-  toolStatusLabel,
+  toolCallLabel,
 } from "./render.js";
 import { Repl, readStdin } from "./repl.js";
 import { runSettingsMenu } from "./settings-menu.js";
@@ -92,8 +93,7 @@ class ReplHook extends AgentHook {
   override async onToolStart(_ctx: AgentHookContext, tc: ToolCallRequest): Promise<void> {
     // Stop the stream spinner so it doesn't overwrite the tool-status line.
     this.streamRenderer.stopSpinner();
-    const label = toolStatusLabel(tc.name, tc.arguments);
-    this.toolStatus.start(label.running);
+    this.toolStatus.start(toolCallLabel(tc.name, tc.arguments));
   }
 
   override async onToolEnd(
@@ -101,8 +101,16 @@ class ReplHook extends AgentHook {
     tc: ToolCallRequest,
     event: ToolEvent,
   ): Promise<void> {
-    const label = toolStatusLabel(tc.name, tc.arguments);
-    this.toolStatus.finish(label.done, event.status === "ok");
+    this.toolStatus.finish(toolCallLabel(tc.name, tc.arguments), event.status === "ok", event.detail);
+  }
+
+  /**
+   * Stop all animated spinners so an interactive prompt (e.g. a permission
+   * question) can own the cursor line without being overdrawn mid-answer.
+   */
+  pauseSpinners(): void {
+    this.streamRenderer.stopSpinner();
+    this.toolStatus.stop();
   }
 
   async close(): Promise<void> {
@@ -489,21 +497,35 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // Session manager
   const sessions = new SessionManager(wsPath);
 
+  // Interactive permission prompt: when the workspace guard blocks a command
+  // or path, ask the user instead of hard-denying. Only wired for the TTY
+  // REPL — one-shot/piped runs (and the API server) keep the hard deny. The
+  // prompter itself is late-bound once the REPL owns stdin (see below).
+  let promptPermission: AskPermission | null = null;
+  // The hook of the turn currently rendering, so the permission prompt can
+  // pause its spinners before taking over the cursor line.
+  let activeReplHook: ReplHook | null = null;
+  const canPrompt = process.stdin.isTTY && process.stdout.isTTY && !oneShot;
+  const askPermission: AskPermission | null = canPrompt
+    ? async (req) => (promptPermission ? promptPermission(req) : false)
+    : null;
+
   // Tool registry
   const tools = new ToolRegistry();
   const restrictWs = cfg.tools.restrictToWorkspace;
   const allowedDir = restrictWs ? wsPath : undefined;
   const extraRead = restrictWs ? [BUILTIN_SKILLS_DIR] : undefined;
-  tools.register(new ReadFileTool(wsPath, allowedDir, extraRead));
-  tools.register(new WriteFileTool(wsPath, allowedDir));
-  tools.register(new EditFileTool(wsPath, allowedDir));
-  tools.register(new ListDirTool(wsPath, allowedDir));
+  tools.register(new ReadFileTool(wsPath, allowedDir, extraRead, askPermission));
+  tools.register(new WriteFileTool(wsPath, allowedDir, null, askPermission));
+  tools.register(new EditFileTool(wsPath, allowedDir, null, askPermission));
+  tools.register(new ListDirTool(wsPath, allowedDir, null, askPermission));
   if (cfg.tools.exec.enable) {
     tools.register(
       new ExecTool({
         workingDir: wsPath,
         timeout: cfg.tools.exec.timeout,
         restrictToWorkspace: restrictWs,
+        ...(askPermission ? { askPermission } : {}),
       }),
     );
   }
@@ -597,6 +619,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         ? {
             hook: (() => {
               replHook = new ReplHook(renderMarkdown);
+              activeReplHook = replHook;
               return replHook;
             })(),
           }
@@ -604,6 +627,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     });
 
     if (replHook) await (replHook as ReplHook).close();
+    activeReplHook = null;
 
     // Persist new messages to session
     const newMsgs = result.messages.slice(1 + history.length); // skip system + history
@@ -653,6 +677,27 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   repl.start();
 
   printWelcomeBanner(VERSION, cfg.agents.defaults.model);
+
+  // Wire the interactive permission prompt now that readline owns stdin.
+  // "always" approves everything for the rest of this session only.
+  let alwaysAllow = false;
+  promptPermission = async (req) => {
+    if (alwaysAllow) return true;
+    // A tool spinner is animating on the current line — stop it so the
+    // question isn't overdrawn while the user reads it.
+    activeReplHook?.pauseSpinners();
+    const reason = req.reason.replace(/^Error:\s*/, "");
+    console.log(styled(`\n🔐 ${reason}`, ansi.yellow));
+    console.log(`   ${req.tool}: ${req.action}`);
+    const answer =
+      (await repl.ask(styled("   Allow? [y]es / [a]lways this session / [N]o: ", ansi.bold))) ?? "";
+    const a = answer.trim().toLowerCase();
+    if (a === "a" || a === "always") {
+      alwaysAllow = true;
+      return true;
+    }
+    return a === "y" || a === "yes";
+  };
 
   const streaming = process.stdout.isTTY;
 

@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { resolve, join, relative, basename, dirname } from "node:path";
 import { homedir } from "node:os";
-import { Tool } from "./base.js";
+import { Tool, type AskPermission } from "./base.js";
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -46,16 +46,47 @@ abstract class FsTool extends Tool {
   protected readonly workspace: string | null;
   protected readonly allowedDir: string | null;
   protected readonly extraAllowedDirs: string[] | null;
+  protected readonly askPermission: AskPermission | null;
 
-  constructor(workspace?: string | null, allowedDir?: string | null, extraAllowedDirs?: string[] | null) {
+  constructor(
+    workspace?: string | null,
+    allowedDir?: string | null,
+    extraAllowedDirs?: string[] | null,
+    askPermission?: AskPermission | null,
+  ) {
     super();
     this.workspace = workspace ?? null;
     this.allowedDir = allowedDir ?? null;
     this.extraAllowedDirs = extraAllowedDirs ?? null;
+    this.askPermission = askPermission ?? null;
   }
 
   protected resolve(path: string): string {
     return resolvePath(path, this.workspace, this.allowedDir, this.extraAllowedDirs);
+  }
+
+  /**
+   * Like {@link resolve}, but when the path falls outside the allowed
+   * directory and an interactive asker is wired, offer the user a chance to
+   * approve the access instead of hard-denying. The denial message keeps the
+   * "outside allowed" marker so each tool's existing catch handles it.
+   */
+  protected async resolveWithPrompt(path: string): Promise<string> {
+    try {
+      return this.resolve(path);
+    } catch (err) {
+      if (this.askPermission && err instanceof Error && err.message.includes("outside allowed")) {
+        const unrestricted = resolvePath(path, this.workspace, null, null);
+        const approved = await this.askPermission({
+          tool: this.name,
+          action: unrestricted,
+          reason: err.message,
+        });
+        if (approved) return unrestricted;
+        throw new Error(`Path ${path} is outside allowed directory and the user denied access`);
+      }
+      throw err;
+    }
   }
 }
 
@@ -98,7 +129,7 @@ export class ReadFileTool extends FsTool {
 
     try {
       if (!path) return "Error reading file: Unknown path";
-      const fp = this.resolve(path);
+      const fp = await this.resolveWithPrompt(path);
       if (!existsSync(fp)) return `Error: File not found: ${path}`;
       if (!statSync(fp).isFile()) return `Error: Not a file: ${path}`;
 
@@ -178,7 +209,7 @@ export class WriteFileTool extends FsTool {
     try {
       if (!path) throw new Error("Unknown path");
       if (content == null) throw new Error("Unknown content");
-      const fp = this.resolve(path);
+      const fp = await this.resolveWithPrompt(path);
       mkdirSync(dirname(fp), { recursive: true });
       writeFileSync(fp, content, "utf-8");
       return `Successfully wrote ${content.length} bytes to ${fp}`;
@@ -244,7 +275,7 @@ export class EditFileTool extends FsTool {
       if (oldText == null) throw new Error("Unknown old_text");
       if (newText == null) throw new Error("Unknown new_text");
 
-      const fp = this.resolve(path);
+      const fp = await this.resolveWithPrompt(path);
       if (!existsSync(fp)) return `Error: File not found: ${path}`;
 
       const raw = readFileSync(fp);
@@ -321,7 +352,7 @@ export class ListDirTool extends FsTool {
 
     try {
       if (path == null) throw new Error("Unknown path");
-      const dp = this.resolve(path);
+      const dp = await this.resolveWithPrompt(path);
       if (!existsSync(dp)) return `Error: Directory not found: ${path}`;
       if (!statSync(dp).isDirectory()) return `Error: Not a directory: ${path}`;
 

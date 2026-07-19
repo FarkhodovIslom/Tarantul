@@ -33,6 +33,33 @@ export function isColorSupported(): boolean {
   return process.stdout.isTTY === true;
 }
 
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+export function stripAnsi(s: string): string {
+  return s.replace(ANSI_PATTERN, "");
+}
+
+/**
+ * Approximate terminal display width: emoji/CJK/fullwidth code points count
+ * as 2 columns, ANSI codes and joiners as 0. Good enough to right-align the
+ * banner box borders around the strings we render ourselves.
+ */
+export function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of stripAnsi(s)) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0xfe0f || cp === 0x200d) continue; // variation selector / ZWJ
+    const wide =
+      cp >= 0x1f000 || // emoji planes
+      (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK
+      (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul
+      (cp >= 0xf900 && cp <= 0xfaff) || // CJK compatibility
+      (cp >= 0xff00 && cp <= 0xff60); // fullwidth forms
+    w += wide ? 2 : 1;
+  }
+  return w;
+}
+
 // ---------------------------------------------------------------------------
 // Markdown → ANSI renderer
 // Block-aware (headings, lists, blockquotes, code fences, rules) with inline
@@ -41,6 +68,10 @@ export function isColorSupported(): boolean {
 // ---------------------------------------------------------------------------
 
 const LOGO = "🕷️";
+// Most terminals render this spider emoji as 1 column (not 2), even though
+// displayWidth() counts it as 2 due to its code point. We correct for this
+// by tracking the actual rendered width separately so box borders stay aligned.
+const LOGO_DISPLAY_WIDTH = 1;
 const BOT_NAME = "tarantul";
 
 const FENCE_RE = /^\s*(```|~~~)/;
@@ -168,22 +199,33 @@ function colorizeSpiderLine(line: string): string {
   return styled(line, ansi.cyan);
 }
 
-/** Print the interactive REPL's welcome screen: mascot art + name/version/model + hint. */
+/** Print the interactive REPL's welcome screen: mascot art + boxed name/model/hints. */
 export function printWelcomeBanner(version: string, model: string): void {
-  process.stdout.write(SPIDER_ART_LINES.map(colorizeSpiderLine).join("\n") + "\n\n");
-  console.log(`${LOGO} ${styled(BOT_NAME, ansi.bold, ansi.cyan)} ${styled(`v${version}`, ansi.dim)}`);
-  console.log(styled(`model: ${model}`, ansi.dim));
-  console.log();
-  console.log(styled('Type "/help" for commands, "exit" to quit.', ansi.dim));
-  console.log();
+  process.stdout.write(SPIDER_ART_LINES.map(colorizeSpiderLine).join("\n") + "\n");
+  const inner = Math.min(56, Math.max(30, (process.stdout.columns || 80) - 4));
+  // logoCorrection: displayWidth() counts 🕷️ as 2 columns but most terminals
+  // render it as 1, so we compensate by adding the difference as extra padding.
+  const row = (content: string, extraPad = 0): string => {
+    const pad = Math.max(0, inner - 1 - displayWidth(content) + extraPad);
+    return `${styled("│", ansi.gray)} ${content}${" ".repeat(pad)}${styled("│", ansi.gray)}`;
+  };
+  const logoCorrection = displayWidth(LOGO) - LOGO_DISPLAY_WIDTH;
+  const lines = [
+    styled(`╭${"─".repeat(inner)}╮`, ansi.gray),
+    row(`${LOGO} ${styled(`Welcome to ${BOT_NAME}`, ansi.bold)} ${styled(`v${version} `, ansi.dim)}`, logoCorrection),
+    row(""),
+    row(styled(`  model: ${model}`, ansi.dim)),
+    row(styled("  /help for commands · exit to quit", ansi.dim)),
+    styled(`╰${"─".repeat(inner)}╯`, ansi.gray),
+  ];
+  process.stdout.write(`${lines.join("\n")}\n\n`);
 }
 
-/** Print the bot header + response text to stdout. */
+/** Print the assistant-turn bullet + response text to stdout. */
 export function printResponse(content: string, asMarkdown: boolean, asText = false): void {
   process.stdout.write("\n");
-  process.stdout.write(styled(`${LOGO} ${BOT_NAME}`, ansi.cyan) + "\n");
   const rendered = asText || !asMarkdown ? content : markdownToAnsi(content);
-  process.stdout.write(rendered + "\n\n");
+  process.stdout.write(`${styled("⏺", ansi.cyan)} ${rendered}\n\n`);
 }
 
 /** Print a dimmed progress / tool hint line. */
@@ -203,22 +245,28 @@ export function clearLine(): void {
   }
 }
 
-/** Simple spinner frames. */
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/** Pulsing-asterisk spinner frames (claude-code style). */
+const SPINNER_FRAMES = ["✢", "✳", "✻", "✽", "✻", "✳"];
 
 export class Spinner {
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private active = false;
+  private startedAt = 0;
 
-  start(message = "thinking..."): void {
+  start(message = "Thinking…"): void {
     if (!process.stdout.isTTY) return;
     this.active = true;
+    this.startedAt = Date.now();
     this.timer = setInterval(() => {
       const f = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]!;
-      process.stdout.write(`\r${styled(f, ansi.cyan)} ${styled(message, ansi.dim)}`);
+      const secs = Math.floor((Date.now() - this.startedAt) / 1000);
+      // Clear the line each tick — the elapsed suffix changes width.
+      process.stdout.write(
+        `\r${ESC}2K${styled(f, ansi.cyan)} ${styled(message, ansi.dim)}${styled(` (${secs}s)`, ansi.dim)}`,
+      );
       this.frame++;
-    }, 80);
+    }, 120);
   }
 
   stop(): void {
@@ -264,11 +312,11 @@ export class StreamRenderer {
     this.streamed = true;
     this.pending += delta;
 
-    // Defer the header until the first non-blank content arrives.
+    // Defer the turn bullet until the first non-blank content arrives.
     if (!this.started) {
       if (!this.pending.trim()) return;
       this.spinner.stop();
-      process.stdout.write("\n" + styled(`${LOGO} ${BOT_NAME}`, ansi.cyan) + "\n");
+      process.stdout.write(`\n${styled("⏺", ansi.cyan)} `);
       this.started = true;
     }
 
@@ -348,6 +396,38 @@ export interface ToolStatusLabel {
 }
 
 /**
+ * Claude-code style call chip: `name(concise arg)` — the raw tool name plus
+ * the one argument that identifies the call (command, path, query, …).
+ */
+export function toolCallLabel(name: string, args: Record<string, unknown>): string {
+  const arg = ((): string => {
+    switch (name) {
+      case "exec":
+        return truncateCmd(args["command"]);
+      case "read_file":
+      case "write_file":
+      case "edit_file":
+      case "list_dir":
+        return pathBaseName(args["path"]);
+      case "web_search":
+      case "memory_search":
+        return truncateCmd(args["query"], 40);
+      case "web_fetch":
+        return truncateCmd(args["url"], 40);
+      case "memory_get":
+        return pathBaseName(args["path"]);
+      case "memory_write":
+        return truncateCmd(args["target"], 40);
+      case "memory_links":
+        return truncateCmd(args["note"], 40);
+      default:
+        return "";
+    }
+  })();
+  return arg ? `${name}(${arg})` : name;
+}
+
+/**
  * Map a tool name + its call args to a human-readable running/done label pair.
  * Unknown tools fall back to a capitalized form of the name.
  */
@@ -390,9 +470,9 @@ export function toolStatusLabel(
 }
 
 /**
- * Renders a single tool's lifecycle: an animated spinner labelled with the
- * running action, replaced in place by a green ✓ / red ✗ and the done label.
- * All methods are no-ops when stdout is not a TTY.
+ * Renders a single tool's lifecycle claude-code style: an animated spinner
+ * labelled with the call chip, replaced by a green/red ⏺ bullet line plus an
+ * indented `⎿ result` summary. All methods are no-ops when stdout is not a TTY.
  */
 export class ToolStatusRenderer {
   private readonly spinner = new Spinner();
@@ -405,12 +485,17 @@ export class ToolStatusRenderer {
     this.active = true;
   }
 
-  finish(label: string, ok = true): void {
+  finish(label: string, ok = true, detail = ""): void {
     if (!process.stdout.isTTY) return;
     this.spinner.stop();
     this.active = false;
-    const mark = ok ? styled("✓", ansi.green) : styled("✗", ansi.red);
-    process.stdout.write(`${mark} ${styled(label, ansi.dim)}\n`);
+    const mark = ok ? styled("⏺", ansi.green) : styled("⏺", ansi.red);
+    process.stdout.write(`${mark} ${styled(label, ansi.bold)}\n`);
+    const summary = (detail.split("\n")[0] ?? "").trim();
+    if (summary) {
+      const capped = summary.length > 76 ? `${summary.slice(0, 75)}…` : summary;
+      process.stdout.write(`  ${styled(`⎿ ${capped}`, ansi.dim)}\n`);
+    }
   }
 
   /** Clear any active spinner without printing a result line. */

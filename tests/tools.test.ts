@@ -142,6 +142,83 @@ describe("ExecTool — restrictToWorkspace guard", () => {
   });
 });
 
+describe("ExecTool — askPermission", () => {
+  const WS = join(tmpdir(), `tarantul-exec-perm-${Date.now()}`);
+  mkdirSync(WS, { recursive: true });
+
+  it("runs a guard-blocked command when the user approves", async () => {
+    const asked: string[] = [];
+    const tool = new ExecTool({
+      restrictToWorkspace: true,
+      workingDir: WS,
+      askPermission: async (req) => {
+        asked.push(req.action);
+        return true;
+      },
+    });
+    const result = await tool.execute({ command: "echo /etc/hosts" });
+    expect(asked).toEqual(["echo /etc/hosts"]);
+    expect(String(result)).toContain("/etc/hosts");
+    expect(String(result)).not.toContain("blocked");
+  });
+
+  it("returns a denial error when the user refuses", async () => {
+    const tool = new ExecTool({
+      restrictToWorkspace: true,
+      workingDir: WS,
+      askPermission: async () => false,
+    });
+    const result = await tool.execute({ command: "cat /etc/hosts" });
+    expect(String(result)).toContain("denied");
+  });
+
+  it("hard-denies without an asker (unchanged behavior)", async () => {
+    const tool = new ExecTool({ restrictToWorkspace: true, workingDir: WS });
+    const result = await tool.execute({ command: "cat /etc/hosts" });
+    expect(String(result)).toContain("blocked");
+  });
+});
+
+describe("FsTool — askPermission", () => {
+  const ws = join(tmpdir(), `tarantul-fs-perm-ws-${Date.now()}`);
+  const outside = join(tmpdir(), `tarantul-fs-perm-out-${Date.now()}`);
+  mkdirSync(ws, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const outsideFile = join(outside, "note.txt");
+  writeFileSync(outsideFile, "outside content");
+
+  it("read_file outside the workspace succeeds when approved", async () => {
+    const tool = new ReadFileTool(ws, ws, null, async () => true);
+    const result = await tool.execute({ path: outsideFile });
+    expect(String(result)).toContain("outside content");
+  });
+
+  it("read_file outside the workspace fails when denied", async () => {
+    const tool = new ReadFileTool(ws, ws, null, async () => false);
+    const result = await tool.execute({ path: outsideFile });
+    expect(String(result)).toContain("denied access");
+  });
+
+  it("list_dir outside the workspace succeeds when approved", async () => {
+    const tool = new ListDirTool(ws, ws, null, async () => true);
+    const result = await tool.execute({ path: outside });
+    expect(String(result)).toContain("note.txt");
+  });
+
+  it("in-workspace access never prompts", async () => {
+    let asked = false;
+    const inside = join(ws, "inside.txt");
+    writeFileSync(inside, "inside content");
+    const tool = new ReadFileTool(ws, ws, null, async () => {
+      asked = true;
+      return true;
+    });
+    const result = await tool.execute({ path: inside });
+    expect(String(result)).toContain("inside content");
+    expect(asked).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tool base — castParams / validateParams (via concrete subclass)
 // ---------------------------------------------------------------------------

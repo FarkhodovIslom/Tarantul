@@ -96,6 +96,47 @@ export class Repl {
 
   /** Read one line from the user. Returns null on EOF (Ctrl-D). */
   readLine(): Promise<string | null> {
+    if (!process.stdout.isTTY) {
+      return this.readLinePlain();
+    }
+
+    // Claude-code style input chrome: draw a rounded box + hint line, park
+    // the cursor on the input row, and after Enter collapse the whole box
+    // into a compact dim `> message` echo.
+    const cols = Math.max(20, process.stdout.columns || 80);
+    const inner = cols - 2;
+    process.stdout.write(
+      `${styled(`╭${"─".repeat(inner)}╮`, ansi.gray)}\n` +
+        "\n" +
+        `${styled(`╰${"─".repeat(inner)}╯`, ansi.gray)}\n` +
+        `${styled("  /help for commands · exit to quit", ansi.dim)}\n` +
+        "\x1b[3A", // park on the (blank) input row
+    );
+
+    return new Promise((resolve) => {
+      if (!this.rl) {
+        resolve(null);
+        return;
+      }
+
+      this.rl.question("│ > ", (answer) => {
+        const line = answer ?? "";
+        // The input occupied ceil((prompt+line)/cols) rows; after Enter the
+        // cursor sits on the row below the last of them. Jump back to the
+        // top border and erase the box + hint, then print the echo.
+        const rows = Math.max(1, Math.ceil((4 + line.length) / cols));
+        process.stdout.write(`\x1b[${rows + 1}A\r\x1b[J`);
+        process.stdout.write(`${styled(`> ${line}`, ansi.dim)}\n`);
+        if (this.history) this.history.push(line);
+        resolve(line);
+      });
+
+      this.rl.once("close", () => resolve(null));
+    });
+  }
+
+  /** Plain-prompt fallback for non-TTY output (no cursor control). */
+  private readLinePlain(): Promise<string | null> {
     return new Promise((resolve) => {
       if (!this.rl) {
         resolve(null);
@@ -110,6 +151,29 @@ export class Repl {
       });
 
       this.rl.once("close", () => resolve(null));
+    });
+  }
+
+  /**
+   * Ask a one-off question with a custom prompt (e.g. a permission request
+   * mid-turn). Unlike {@link readLine}, the answer is not pushed to history.
+   * Returns null when no interface is active.
+   */
+  ask(promptText: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      if (!this.rl) {
+        resolve(null);
+        return;
+      }
+      const rl = this.rl;
+      // Removed once answered — unlike a leaked once("close"), repeated asks
+      // in one session must not pile up listeners on the shared interface.
+      const onClose = (): void => resolve(null);
+      rl.once("close", onClose);
+      rl.question(promptText, (answer) => {
+        rl.removeListener("close", onClose);
+        resolve(answer ?? "");
+      });
     });
   }
 
