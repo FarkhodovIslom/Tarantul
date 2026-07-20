@@ -93,15 +93,22 @@ export function ToolLine({
 export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
   switch (item.kind) {
     case "user":
+      // Compact, unbordered echo — deliberately structured differently from
+      // the assistant's bordered block (not just a different border color)
+      // so the two stay distinguishable even in low-color terminals.
       return (
-        <BorderedBlock color={dracula.pink}>
-          <Text>{item.text}</Text>
-        </BorderedBlock>
+        <Box marginBottom={1}>
+          <Text color={dracula.pink}>{"> "}</Text>
+          <Text color={dracula.pink}>{item.text}</Text>
+        </Box>
       );
     case "assistant":
       return (
         <BorderedBlock color={dracula.purple}>
-          <Text>{markdownToAnsi(item.text)}</Text>
+          <Text>
+            <Text color={dracula.purple}>{"⏺ "}</Text>
+            {markdownToAnsi(item.text)}
+          </Text>
           <Text color={dracula.comment}>{`${item.model} (${item.time})`}</Text>
         </BorderedBlock>
       );
@@ -159,7 +166,10 @@ export function LiveRegion({
       ))}
       {assistant ? (
         <BorderedBlock color={dracula.purple}>
-          <Text>{markdownToAnsi(assistant)}</Text>
+          <Text>
+            <Text color={dracula.purple}>{"⏺ "}</Text>
+            {markdownToAnsi(assistant)}
+          </Text>
         </BorderedBlock>
       ) : null}
       {busy ? <Spinner label={assistant ? "Writing…" : "Thinking…"} /> : null}
