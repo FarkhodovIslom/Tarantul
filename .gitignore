@@ -21,8 +21,10 @@ coverage/
 # Environment variables
 .env
 .env.*
-!.env.example
-!.env.template
+
+# Dependencies
+.bun/
+node_modules/
 
 # OS generated files
 .DS_Store
