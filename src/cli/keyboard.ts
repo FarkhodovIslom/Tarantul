@@ -1,21 +1,29 @@
-
 /**
  * Raw-keypress input primitives for the `/settings` arrow-key menu.
  *
- * Requires exclusive control of stdin: a live `readline.Interface` on the
- * same stream decodes keypresses itself, and letting both consume the
- * stream at once corrupts input (verified empirically — a paused Interface
- * still buffers keystrokes internally even while a second listener reads
- * the same stream). Callers must fully close their `readline.Interface`
- * first (see `Repl.suspend()`/`Repl.restore()` in `repl.ts`) and only
- * recreate it after `endKeyboardSession()`.
+ * Requires exclusive control of stdin: any other consumer decoding
+ * keypresses on the same stream at once corrupts input (verified
+ * empirically — a "paused" `readline.Interface` still buffers keystrokes
+ * internally even while a second listener reads the same stream, and Ink's
+ * `<App>` sets up its own keypress listener + raw mode for as long as it's
+ * mounted). Callers must fully release stdin first — close a
+ * `readline.Interface` or `unmount()` the Ink instance — and only resume it
+ * after `endKeyboardSession()` (see the `/settings` handling in `main.ts`,
+ * which unmounts Ink before this session and remounts a fresh instance
+ * after).
  *
- * `process.stdin` already has `readline.emitKeypressEvents()` wired up for
- * the life of the process once any `readline.Interface` has existed on it
- * (true throughout the REPL), so a session only needs to (re)enable raw
- * mode and put the stream back in flowing mode.
+ * `beginKeyboardSession()` wires up `readline.emitKeypressEvents()` itself —
+ * it's what makes `process.stdin` emit the `"keypress"` events this module
+ * listens for. Ink does not use that event (it parses raw input itself), so
+ * nothing else in the app can be relied on to have wired it up first.
+ *
+ * Note: this module does not keep the process alive on its own — see the
+ * dedicated keep-alive interval around the whole interactive REPL section in
+ * `main.ts`, which covers the gap Ink's own stdin.unref()-on-unmount would
+ * otherwise leave between a `/settings` session and the next Ink mount.
  */
 
+import { emitKeypressEvents } from "node:readline";
 import { styled, ansi } from "./render.js";
 
 export interface KeyEvent {
@@ -50,6 +58,10 @@ let sigintFallback: (() => void) | null = null;
 
 /** Enable raw, flowing keypress mode. Call once before a run of prompts. */
 export function beginKeyboardSession(): void {
+  // Idempotent: Node tracks whether a stream already has a keypress decoder
+  // attached, so calling this on every session (rather than trusting some
+  // other part of the app to have called it once) is cheap and safe.
+  emitKeypressEvents(process.stdin);
   if (process.stdin.isTTY && !process.stdin.isRaw) process.stdin.setRawMode(true);
   process.stdin.resume();
   // Defensive fallback for the brief window before raw mode fully takes
@@ -58,9 +70,24 @@ export function beginKeyboardSession(): void {
   process.once("SIGINT", sigintFallback);
 }
 
-/** Stop the flowing stream; the caller hands stdin back to a fresh readline.Interface next. */
+/**
+ * Stop the flowing stream and hand stdin back in as close to its pristine
+ * state as possible — the caller mounts a fresh Ink instance next.
+ *
+ * `emitKeypressEvents()` (in {@link beginKeyboardSession}) attaches a 'data'
+ * listener with no public way to detach it, which leaves the stream latched
+ * into flowing mode; Ink's own input handling expects to manage that mode
+ * itself via 'readable' + `read()`, and the two don't coexist — with the
+ * stray 'data' listener still attached, the *next* Ink instance renders but
+ * never receives another keystroke (verified empirically). Dropping both
+ * listener kinds and turning raw mode off lets Ink's mount effect set it
+ * all up again from a clean slate, exactly like a first mount.
+ */
 export function endKeyboardSession(): void {
   process.stdin.pause();
+  process.stdin.removeAllListeners("data");
+  process.stdin.removeAllListeners("readable");
+  if (process.stdin.isTTY && process.stdin.isRaw) process.stdin.setRawMode(false);
   if (sigintFallback) {
     process.removeListener("SIGINT", sigintFallback);
     sigintFallback = null;
@@ -96,7 +123,10 @@ export interface SelectMenuOpts {
  * confirm with Enter, cancel with Esc. Resolves the chosen index, or `null`
  * on Esc. Ctrl-C exits the process.
  */
-export function selectMenu(options: SelectOption[], opts: SelectMenuOpts = {}): Promise<number | null> {
+export function selectMenu(
+  options: SelectOption[],
+  opts: SelectMenuOpts = {},
+): Promise<number | null> {
   const io = opts.io ?? defaultIO();
   return new Promise((resolve) => {
     let index = Math.min(Math.max(opts.initial ?? 0, 0), Math.max(options.length - 1, 0));

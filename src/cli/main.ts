@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { SystemPromptCache, buildMessages } from "../agent/context.js";
 import { AgentLoop } from "../agent/loop.js";
@@ -33,90 +34,20 @@ import { getCronDir } from "../config/paths.js";
 import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
 import { SettingsController } from "../config/settings.js";
 import { CronService } from "../cron/service.js";
+import { InkHook } from "./ink/InkHook.js";
+import { mountApp } from "./ink/run.js";
+import type { PermDecision } from "./ink/types.js";
+import { UiBridge } from "./ink/types.js";
 import { createProvider } from "../providers/factory.js";
 import { SessionManager } from "../session/manager.js";
 import { BUILTIN_SKILLS_DIR, SkillsLoader } from "../skills/index.js";
 import { runOnboarding } from "./onboarding.js";
-import {
-  StreamRenderer,
-  ToolStatusRenderer,
-  ansi,
-  printProgress,
-  printResponse,
-  printWelcomeBanner,
-  styled,
-  toolCallLabel,
-} from "./render.js";
-import { Repl, readStdin } from "./repl.js";
+import { ansi, printProgress, printResponse, styled } from "./render.js";
+import { CliHistory, readStdin } from "./repl.js";
 import { runSettingsMenu } from "./settings-menu.js";
-
-import { AgentHook } from "../agent/hook.js";
-import type { AgentHookContext, ToolEvent } from "../agent/hook.js";
-import type { ToolCallRequest } from "../providers/base.js";
 
 const VERSION = "0.1.0";
 const LOGO = "🕷️";
-
-// ---------------------------------------------------------------------------
-// ReplHook — REPL-only streaming + tool-status rendering
-// ---------------------------------------------------------------------------
-
-/**
- * A named hook for the interactive REPL that:
- * - streams model output token-by-token via StreamRenderer
- * - renders per-tool spinners + checkmarks via ToolStatusRenderer
- *
- * Non-streaming paths (one-shot / piped) never attach this hook, so the
- * new methods stay as no-ops outside the REPL.
- */
-class ReplHook extends AgentHook {
-  private readonly streamRenderer: StreamRenderer;
-  private readonly toolStatus = new ToolStatusRenderer();
-
-  constructor(renderMarkdown: boolean) {
-    super();
-    this.streamRenderer = new StreamRenderer(renderMarkdown);
-  }
-
-  override wantsStreaming(): boolean {
-    return true;
-  }
-
-  override async onStream(_ctx: AgentHookContext, delta: string): Promise<void> {
-    await this.streamRenderer.onDelta(delta);
-  }
-
-  override async onStreamEnd(_ctx: AgentHookContext, opts: { resuming: boolean }): Promise<void> {
-    await this.streamRenderer.onEnd(opts);
-  }
-
-  override async onToolStart(_ctx: AgentHookContext, tc: ToolCallRequest): Promise<void> {
-    // Stop the stream spinner so it doesn't overwrite the tool-status line.
-    this.streamRenderer.stopSpinner();
-    this.toolStatus.start(toolCallLabel(tc.name, tc.arguments));
-  }
-
-  override async onToolEnd(
-    _ctx: AgentHookContext,
-    tc: ToolCallRequest,
-    event: ToolEvent,
-  ): Promise<void> {
-    this.toolStatus.finish(toolCallLabel(tc.name, tc.arguments), event.status === "ok", event.detail);
-  }
-
-  /**
-   * Stop all animated spinners so an interactive prompt (e.g. a permission
-   * question) can own the cursor line without being overdrawn mid-answer.
-   */
-  pauseSpinners(): void {
-    this.streamRenderer.stopSpinner();
-    this.toolStatus.stop();
-  }
-
-  async close(): Promise<void> {
-    await this.streamRenderer.close();
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Arg parser — minimal, no deps
@@ -500,12 +431,9 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // Interactive permission prompt: when the workspace guard blocks a command
   // or path, ask the user instead of hard-denying. Only wired for the TTY
   // REPL — one-shot/piped runs (and the API server) keep the hard deny. The
-  // prompter itself is late-bound once the REPL owns stdin (see below).
+  // prompter itself is late-bound once the Ink app owns stdin (see below).
   let promptPermission: AskPermission | null = null;
-  // The hook of the turn currently rendering, so the permission prompt can
-  // pause its spinners before taking over the cursor line.
-  let activeReplHook: ReplHook | null = null;
-  const canPrompt = process.stdin.isTTY && process.stdout.isTTY && !oneShot;
+  const canPrompt = process.stdin.isTTY && !oneShot;
   const askPermission: AskPermission | null = canPrompt
     ? async (req) => (promptPermission ? promptPermission(req) : false)
     : null;
@@ -586,9 +514,11 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   });
 
   // -----------------------------------------------------------------------
-  // Run one turn: build messages → run → render response
+  // Run one turn: build messages → run → return the final answer.
+  // Used by one-shot (-m) and piped-input modes; the interactive REPL uses
+  // runTurnInk below instead, which streams into the Ink UI.
   // -----------------------------------------------------------------------
-  async function runTurn(userMessage: string, streaming: boolean): Promise<string | null> {
+  async function runTurn(userMessage: string): Promise<string | null> {
     memoryService?.setSessionKey(sessionId);
     const session = sessions.getOrCreate(sessionId);
     const history = session.getHistory(0);
@@ -601,8 +531,6 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       chatId: "direct",
     });
 
-    let replHook: ReplHook | null = null;
-
     const result = await runner.run({
       initialMessages: messages,
       tools,
@@ -612,27 +540,10 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       temperature: cfg.agents.defaults.temperature,
       maxTokens: cfg.agents.defaults.maxTokens,
       contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
-      progressCallback: async (msg: string) => {
-        if (!streaming) printProgress(msg);
-      },
-      ...(streaming
-        ? {
-            hook: (() => {
-              replHook = new ReplHook(renderMarkdown);
-              activeReplHook = replHook;
-              return replHook;
-            })(),
-          }
-        : {}),
+      progressCallback: async (msg: string) => printProgress(msg),
     });
 
-    if (replHook) await (replHook as ReplHook).close();
-    activeReplHook = null;
-
-    // Persist new messages to session
-    const newMsgs = result.messages.slice(1 + history.length); // skip system + history
     const now = new Date().toISOString();
-    // Save user + assistant messages to session
     session.messages.push(
       { role: "user", content: userMessage, timestamp: now },
       ...(result.finalContent
@@ -650,7 +561,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // One-shot mode: -m "message"
   // -----------------------------------------------------------------------
   if (oneShot) {
-    const response = await runTurn(oneShot, false);
+    const response = await runTurn(oneShot);
     if (response) printResponse(response, renderMarkdown);
     await closeAllMcpServers(mcpConnections);
     return;
@@ -662,7 +573,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   if (!process.stdin.isTTY) {
     const input = await readStdin();
     if (input) {
-      const response = await runTurn(input, false);
+      const response = await runTurn(input);
       if (response) printResponse(response, renderMarkdown);
     }
     await closeAllMcpServers(mcpConnections);
@@ -670,115 +581,163 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   }
 
   // -----------------------------------------------------------------------
-  // Interactive REPL
+  // Interactive REPL (Ink)
   // -----------------------------------------------------------------------
-  const historyPath = getCliHistoryPath();
-  const repl = new Repl(historyPath);
-  repl.start();
+  // Dedicated keep-alive: Ink unref()s stdin when it disables raw mode on
+  // unmount, and `/settings`'s own raw-mode session (keyboard.ts) leaves it
+  // paused rather than restoring that ref — so between the `/settings`
+  // round-trip's unmount and the next mountApp() below, nothing holds the
+  // event loop open, and Node's `beforeExit` can tear down the freshly
+  // mounted Ink instance before its own effects get a chance to re-ref
+  // stdin (verified empirically; a plain stdin.ref() at either transition
+  // point isn't enough — this sidesteps the race instead of chasing it).
+  const keepAlive = setInterval(() => {}, 1 << 30);
+  const cliHistory = new CliHistory(getCliHistoryPath());
+  const wsDisplay = wsPath.replace(homedir(), "~");
 
-  printWelcomeBanner(VERSION, cfg.agents.defaults.model);
-
-  // Wire the interactive permission prompt now that readline owns stdin.
-  // "always" approves everything for the rest of this session only.
-  let alwaysAllow = false;
-  promptPermission = async (req) => {
-    if (alwaysAllow) return true;
-    // A tool spinner is animating on the current line — stop it so the
-    // question isn't overdrawn while the user reads it.
-    activeReplHook?.pauseSpinners();
-    const reason = req.reason.replace(/^Error:\s*/, "");
-    console.log(styled(`\n🔐 ${reason}`, ansi.yellow));
-    console.log(`   ${req.tool}: ${req.action}`);
-    const answer =
-      (await repl.ask(styled("   Allow? [y]es / [a]lways this session / [N]o: ", ansi.bold))) ?? "";
-    const a = answer.trim().toLowerCase();
-    if (a === "a" || a === "always") {
-      alwaysAllow = true;
-      return true;
-    }
-    return a === "y" || a === "yes";
-  };
-
-  const streaming = process.stdout.isTTY;
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    let line: string | null;
+  // Run one turn, streaming its lifecycle (assistant text, tool calls, notices)
+  // into the given bridge instead of returning a value — the Ink app maps
+  // these events to transcript state as they arrive.
+  async function runTurnInk(bridge: UiBridge, userMessage: string): Promise<void> {
+    bridge.emitEvent({ t: "busy", value: true });
     try {
-      line = await repl.readLine();
-    } catch {
-      break;
-    }
-    if (line === null) break; // EOF
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (repl.isExit(trimmed)) break;
+      memoryService?.setSessionKey(sessionId);
+      const session = sessions.getOrCreate(sessionId);
+      const history = session.getHistory(0);
 
-    // /settings — needs cfg/provider access the CommandRouter handlers
-    // don't have, and takes exclusive raw-keypress control of stdin for its
-    // arrow-key UI, so it's special-cased here rather than routed through
-    // the CommandRouter. suspend()/restore() hand stdin to it and back.
-    if (trimmed === "/settings" || trimmed === "/config") {
-      repl.suspend();
-      try {
-        await runSettingsMenu({
-          controller: settings,
-          skillsLoader,
-          getSession: () => sessions.getOrCreate(sessionId),
-        });
-      } finally {
-        repl.restore();
-      }
-      continue;
-    }
-
-    // Slash commands
-    if (trimmed.startsWith("/")) {
-      const dummyMsg = {
+      const messages = buildMessages({
+        history,
+        currentMessage: userMessage,
+        systemPrompt: getSystemPrompt(sessionId),
         channel: "cli",
-        senderId: "user",
         chatId: "direct",
-        content: trimmed,
-      };
-      if (router.isPriority(trimmed)) {
+      });
+
+      const hook = new InkHook(bridge, cfg.agents.defaults.model);
+      const result = await runner.run({
+        initialMessages: messages,
+        tools,
+        model: cfg.agents.defaults.model,
+        maxIterations: cfg.agents.defaults.maxToolIterations,
+        maxToolResultChars: cfg.agents.defaults.maxToolResultChars,
+        temperature: cfg.agents.defaults.temperature,
+        maxTokens: cfg.agents.defaults.maxTokens,
+        contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
+        progressCallback: async (msg) => bridge.emitEvent({ t: "notice", text: msg, tone: "info" }),
+        hook,
+      });
+
+      // A provider that returns content without ever streaming deltas would
+      // otherwise vanish silently — surface it as a single completed block.
+      if (!hook.didStream && result.finalContent) {
+        bridge.emitEvent({ t: "assistant-delta", text: result.finalContent });
+        bridge.emitEvent({ t: "assistant-end", model: cfg.agents.defaults.model });
+      }
+
+      const now = new Date().toISOString();
+      session.messages.push(
+        { role: "user", content: userMessage, timestamp: now },
+        ...(result.finalContent
+          ? [{ role: "assistant", content: result.finalContent, timestamp: now }]
+          : []),
+      );
+      session.updatedAt = new Date();
+      recordTurnUsage(session, result.usage, cfg.agents.defaults.model);
+      await sessions.save(session);
+    } catch (err) {
+      bridge.emitEvent({ t: "notice", text: `Error: ${err}`, tone: "error" });
+    } finally {
+      bridge.emitEvent({ t: "busy", value: false });
+    }
+  }
+
+  // Dispatch one submitted line: slash command (mirrors the CommandRouter
+  // semantics used by every other front end) or, falling through, a normal
+  // chat turn. Unrecognized slash text is intentionally sent to the model —
+  // matching CommandRouter.dispatch()'s existing fallthrough for non-priority
+  // commands it doesn't recognize.
+  async function handleSlashOrMessage(bridge: UiBridge, line: string): Promise<void> {
+    if (line.startsWith("/")) {
+      const dummyMsg = { channel: "cli", senderId: "user", chatId: "direct", content: line };
+      if (router.isPriority(line)) {
         const resp = await router.dispatchPriority({
           msg: dummyMsg,
           session: sessions.getOrCreate(sessionId),
           key: sessionId,
-          raw: trimmed,
+          raw: line,
           args: "",
           loop: null,
         });
-        if (resp) printResponse(resp.content, false, true);
-        continue;
+        if (resp) bridge.emitEvent({ t: "notice", text: resp.content, tone: "info" });
+        return;
       }
       const resp = await router.dispatch({
         msg: dummyMsg,
         session: sessions.getOrCreate(sessionId),
         key: sessionId,
-        raw: trimmed,
+        raw: line,
         args: "",
         loop: null,
       });
       if (resp) {
-        const asText = resp.metadata?.["renderAs"] === "text";
-        printResponse(resp.content, renderMarkdown && !asText, asText);
-        continue;
+        bridge.emitEvent({ t: "notice", text: resp.content, tone: "info" });
+        if (line === "/new") bridge.emitEvent({ t: "clear" });
+        return;
       }
     }
-
-    // Normal message
-    try {
-      const response = await runTurn(trimmed, streaming);
-      if (response && !streaming) {
-        printResponse(response, renderMarkdown);
-      }
-    } catch (err) {
-      console.error(styled(`Error: ${err}`, ansi.red));
-    }
+    await runTurnInk(bridge, line);
   }
 
-  repl.close();
+  // "always" approves permission prompts for the rest of this session,
+  // surviving a `/settings` remount below.
+  let alwaysAllow = false;
+
+  // Remount loop: a fresh Ink instance + UiBridge per pass. `/settings` needs
+  // exclusive raw stdin (see keyboard.ts), so its handler unmounts the current
+  // Ink app first (via the App calling exit()) and this loop remounts a new
+  // one once the settings menu returns.
+  let firstMount = true;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const bridge = new UiBridge();
+    let settingsRequested = false;
+
+    promptPermission = async (req) => {
+      if (alwaysAllow) return true;
+      const decision = await new Promise<PermDecision>((resolveDecision) => {
+        bridge.emitEvent({ t: "permission", req, resolve: resolveDecision });
+      });
+      if (decision === "always") alwaysAllow = true;
+      return decision !== "no";
+    };
+
+    const app = mountApp({
+      bridge,
+      version: VERSION,
+      model: cfg.agents.defaults.model,
+      statusLeft: `tarantul v${VERSION}`,
+      statusRight: wsDisplay,
+      showBanner: firstMount,
+      history: cliHistory.all,
+      onSubmit: (line) => handleSlashOrMessage(bridge, line),
+      onHistoryPush: (line) => cliHistory.push(line),
+      onSettings: () => {
+        settingsRequested = true;
+      },
+    });
+
+    await app.waitUntilExit();
+    firstMount = false;
+
+    if (!settingsRequested) break;
+    await runSettingsMenu({
+      controller: settings,
+      skillsLoader,
+      getSession: () => sessions.getOrCreate(sessionId),
+    });
+  }
+
+  clearInterval(keepAlive);
   await closeAllMcpServers(mcpConnections);
   console.log(styled("Goodbye!", ansi.dim));
 }

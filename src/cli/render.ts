@@ -61,18 +61,103 @@ export function displayWidth(s: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Dracula theme (truecolor) — accents used by all REPL chrome
+// ---------------------------------------------------------------------------
+
+function hexRgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+/**
+ * True when the terminal understands 24-bit `38;2;r;g;b` sequences. Notably
+ * false for macOS Terminal.app, which mangles truecolor into muddy 8-color
+ * approximations — there we emit the nearest xterm-256 index instead.
+ */
+function supportsTruecolor(): boolean {
+  if (/truecolor|24bit/i.test(process.env["COLORTERM"] ?? "")) return true;
+  const tp = process.env["TERM_PROGRAM"] ?? "";
+  if (["iTerm.app", "WezTerm", "ghostty", "vscode", "Hyper", "Tabby"].includes(tp)) return true;
+  return /kitty|alacritty|direct/i.test(process.env["TERM"] ?? "");
+}
+
+const TRUECOLOR = supportsTruecolor();
+
+/** Quantization levels of the xterm-256 6×6×6 color cube. */
+const CUBE_LEVELS = [0, 95, 135, 175, 215, 255];
+
+/** Nearest xterm-256 palette index for an RGB color (cube or grayscale ramp). */
+export function nearest256(r: number, g: number, b: number): number {
+  const qi = (v: number): number => {
+    let best = 0;
+    for (let i = 1; i < CUBE_LEVELS.length; i++) {
+      if (Math.abs((CUBE_LEVELS[i] ?? 0) - v) < Math.abs((CUBE_LEVELS[best] ?? 0) - v)) best = i;
+    }
+    return best;
+  };
+  const ri = qi(r);
+  const gi = qi(g);
+  const bi = qi(b);
+  const cube = [CUBE_LEVELS[ri] ?? 0, CUBE_LEVELS[gi] ?? 0, CUBE_LEVELS[bi] ?? 0] as const;
+
+  // Grayscale ramp: indexes 232-255 cover #080808..#eeeeee in steps of 10.
+  const gray = Math.round((r + g + b) / 3);
+  const gs = Math.min(23, Math.max(0, Math.round((gray - 8) / 10)));
+  const grayVal = 8 + gs * 10;
+
+  const dist = (x: readonly [number, number, number]): number =>
+    (x[0] - r) ** 2 + (x[1] - g) ** 2 + (x[2] - b) ** 2;
+  return dist(cube) <= dist([grayVal, grayVal, grayVal]) ? 16 + 36 * ri + 6 * gi + bi : 232 + gs;
+}
+
+function fgHex(hex: string): string {
+  const [r, g, b] = hexRgb(hex);
+  return TRUECOLOR ? `${ESC}38;2;${r};${g};${b}m` : `${ESC}38;5;${nearest256(r, g, b)}m`;
+}
+
+function bgHex(hex: string): string {
+  const [r, g, b] = hexRgb(hex);
+  return TRUECOLOR ? `${ESC}48;2;${r};${g};${b}m` : `${ESC}48;5;${nearest256(r, g, b)}m`;
+}
+
+/** Dracula palette (https://draculatheme.com/contribute#color-palette). */
+export const theme = {
+  purple: fgHex("#bd93f9"),
+  pink: fgHex("#ff79c6"),
+  cyan: fgHex("#8be9fd"),
+  green: fgHex("#50fa7b"),
+  red: fgHex("#ff5555"),
+  orange: fgHex("#ffb86c"),
+  yellow: fgHex("#f1fa8c"),
+  comment: fgHex("#6272a4"),
+  fgMain: fgHex("#f8f8f2"),
+  /** Tinted background for the input bar ("current line" in Dracula). */
+  inputBg: bgHex("#44475a"),
+  /** Subtle panel background for message blocks (Dracula "background"). */
+  panelBg: bgHex("#282a36"),
+};
+
+/**
+ * One full-width line of an opencode-style message panel: colored left
+ * border + content on a subtly tinted background. Inline resets inside the
+ * rendered content are re-tinted so the panel background never drops out
+ * mid-line. Falls back to a plain bordered line when color is off.
+ */
+export function panelLine(rendered: string, borderColor: string): string {
+  if (!isColorSupported()) return `▌ ${rendered}\n`;
+  const cols = Math.max(20, process.stdout.columns || 80);
+  const bg = theme.panelBg;
+  const body = rendered.replaceAll(ansi.reset, `${ansi.reset}${bg}${theme.fgMain}`);
+  const pad = Math.max(0, cols - 2 - displayWidth(rendered));
+  return `${bg}${borderColor}▌${ansi.reset}${bg}${theme.fgMain} ${body}${" ".repeat(pad)}${ansi.reset}\n`;
+}
+
+// ---------------------------------------------------------------------------
 // Markdown → ANSI renderer
 // Block-aware (headings, lists, blockquotes, code fences, rules) with inline
 // emphasis. Stateful across lines so fenced code blocks survive line-by-line
 // streaming. Lightweight — no external parser.
 // ---------------------------------------------------------------------------
-
-const LOGO = "🕷️";
-// Most terminals render this spider emoji as 1 column (not 2), even though
-// displayWidth() counts it as 2 due to its code point. We correct for this
-// by tracking the actual rendered width separately so box borders stay aligned.
-const LOGO_DISPLAY_WIDTH = 1;
-const BOT_NAME = "tarantul";
 
 const FENCE_RE = /^\s*(```|~~~)/;
 
@@ -91,9 +176,9 @@ export class MarkdownRenderer {
     // Fenced code block delimiters toggle the fenced state either way.
     if (FENCE_RE.test(src)) {
       this.inFence = !this.inFence;
-      return styled(src, ansi.gray);
+      return styled(src, theme.comment);
     }
-    if (this.inFence) return styled(src, ansi.gray);
+    if (this.inFence) return styled(src, theme.green);
 
     return renderBlockLine(src);
   }
@@ -118,32 +203,34 @@ function renderBlockLine(l: string): string {
   const heading = l.match(/^(#{1,6})\s+(.*)$/);
   if (heading) {
     const codes =
-      heading[1]!.length === 1 ? [ansi.bold, ansi.cyan, ansi.underline] : [ansi.bold, ansi.cyan];
+      heading[1]!.length === 1
+        ? [ansi.bold, theme.pink, ansi.underline]
+        : [ansi.bold, theme.pink];
     return styled(inlineMarkdown(heading[2]!), ...codes);
   }
 
   // Horizontal rule  --- / *** / ___
   if (/^\s*([-*_])\1{2,}\s*$/.test(l)) {
     const width = Math.min(40, process.stdout.columns || 40);
-    return styled("─".repeat(width), ansi.gray);
+    return styled("─".repeat(width), theme.comment);
   }
 
   // Blockquote  > text
   const quote = l.match(/^(\s*)>\s?(.*)$/);
   if (quote) {
-    return `${quote[1]}${styled("│ ", ansi.gray)}${styled(inlineMarkdown(quote[2]!), ansi.gray)}`;
+    return `${quote[1]}${styled("│ ", theme.comment)}${styled(inlineMarkdown(quote[2]!), theme.comment)}`;
   }
 
   // Ordered list  1. text
   const ordered = l.match(/^(\s*)(\d+)\.\s+(.*)$/);
   if (ordered) {
-    return `${ordered[1]}${styled(`${ordered[2]}.`, ansi.cyan)} ${inlineMarkdown(ordered[3]!)}`;
+    return `${ordered[1]}${styled(`${ordered[2]}.`, theme.purple)} ${inlineMarkdown(ordered[3]!)}`;
   }
 
   // Bullet list  - / * / + text
   const bullet = l.match(/^(\s*)[-*+]\s+(.*)$/);
   if (bullet) {
-    return `${bullet[1]}${styled("•", ansi.cyan)} ${inlineMarkdown(bullet[2]!)}`;
+    return `${bullet[1]}${styled("•", theme.purple)} ${inlineMarkdown(bullet[2]!)}`;
   }
 
   return inlineMarkdown(l);
@@ -154,7 +241,7 @@ function inlineMarkdown(text: string): string {
   return (
     text
       // `code` — render first so its contents are left intact
-      .replace(/`([^`]+)`/g, (_, m: string) => styled(m, ansi.yellow))
+      .replace(/`([^`]+)`/g, (_, m: string) => styled(m, theme.green))
       // **bold** / __bold__
       .replace(/\*\*(.+?)\*\*/g, (_, m: string) => styled(m, ansi.bold))
       .replace(/__(.+?)__/g, (_, m: string) => styled(m, ansi.bold))
@@ -167,65 +254,25 @@ function inlineMarkdown(text: string): string {
       .replace(
         /\[([^\]]+)\]\(([^)]+)\)/g,
         (_, label: string, url: string) =>
-          `${styled(label, ansi.blue, ansi.underline)}${styled(` (${url})`, ansi.dim)}`,
+          `${styled(label, theme.cyan, ansi.underline)}${styled(` (${url})`, ansi.dim)}`,
       )
   );
 }
 
 // ---------------------------------------------------------------------------
-// Terminal output functions
+// Terminal output functions — used by non-interactive (one-shot/piped) runs.
+// The interactive REPL is an Ink app (see cli/ink/); Ink owns its own
+// rendering and reuses markdownToAnsi/toolCallLabel from this module.
 // ---------------------------------------------------------------------------
 
-/**
- * Spider mascot art for the REPL welcome banner.
- */
-const SPIDER_ART_LINES = [
-  "       />    </",
-  "      //      \\\\",
-  " </   \\\\  __  //   />",
-  "  \\\\___\\\\(oo)//___//",
-  "   `---.X{II}X.---'",
-  "______//=/\\/\\=\\\\_____",
-  "`-----/| =  = |\\-----'",
-  "     //\\ =\\/= /\\\\",
-  "    ((  `-..-'  ))",
-  "     \\)        (/",
-  ""
-];
-
-/** Colorize one line of the spider art (rendered as cyan). */
-function colorizeSpiderLine(line: string): string {
-  if (!isColorSupported()) return line;
-  return styled(line, ansi.cyan);
-}
-
-/** Print the interactive REPL's welcome screen: mascot art + boxed name/model/hints. */
-export function printWelcomeBanner(version: string, model: string): void {
-  process.stdout.write(SPIDER_ART_LINES.map(colorizeSpiderLine).join("\n") + "\n");
-  const inner = Math.min(56, Math.max(30, (process.stdout.columns || 80) - 4));
-  // logoCorrection: displayWidth() counts 🕷️ as 2 columns but most terminals
-  // render it as 1, so we compensate by adding the difference as extra padding.
-  const row = (content: string, extraPad = 0): string => {
-    const pad = Math.max(0, inner - 1 - displayWidth(content) + extraPad);
-    return `${styled("│", ansi.gray)} ${content}${" ".repeat(pad)}${styled("│", ansi.gray)}`;
-  };
-  const logoCorrection = displayWidth(LOGO) - LOGO_DISPLAY_WIDTH;
-  const lines = [
-    styled(`╭${"─".repeat(inner)}╮`, ansi.gray),
-    row(`${LOGO} ${styled(`Welcome to ${BOT_NAME}`, ansi.bold)} ${styled(`v${version} `, ansi.dim)}`, logoCorrection),
-    row(""),
-    row(styled(`  model: ${model}`, ansi.dim)),
-    row(styled("  /help for commands · exit to quit", ansi.dim)),
-    styled(`╰${"─".repeat(inner)}╯`, ansi.gray),
-  ];
-  process.stdout.write(`${lines.join("\n")}\n\n`);
-}
-
-/** Print the assistant-turn bullet + response text to stdout. */
+/** Print an assistant response as an accent-bordered tinted panel (opencode-style). */
 export function printResponse(content: string, asMarkdown: boolean, asText = false): void {
-  process.stdout.write("\n");
   const rendered = asText || !asMarkdown ? content : markdownToAnsi(content);
-  process.stdout.write(`${styled("⏺", ansi.cyan)} ${rendered}\n\n`);
+  const block = rendered
+    .split("\n")
+    .map((l) => panelLine(l, theme.purple))
+    .join("");
+  process.stdout.write(`\n${block}\n`);
 }
 
 /** Print a dimmed progress / tool hint line. */
@@ -233,145 +280,8 @@ export function printProgress(text: string): void {
   process.stdout.write(styled(`  ↳ ${text}`, ansi.dim) + "\n");
 }
 
-/** Print a streaming delta in-place (no newline). */
-export function printDelta(delta: string): void {
-  process.stdout.write(delta);
-}
-
-/** Clear current line and move cursor to column 0. */
-export function clearLine(): void {
-  if (process.stdout.isTTY) {
-    process.stdout.write(`\r${ESC}2K`);
-  }
-}
-
-/** Pulsing-asterisk spinner frames (claude-code style). */
-const SPINNER_FRAMES = ["✢", "✳", "✻", "✽", "✻", "✳"];
-
-export class Spinner {
-  private frame = 0;
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private active = false;
-  private startedAt = 0;
-
-  start(message = "Thinking…"): void {
-    if (!process.stdout.isTTY) return;
-    this.active = true;
-    this.startedAt = Date.now();
-    this.timer = setInterval(() => {
-      const f = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]!;
-      const secs = Math.floor((Date.now() - this.startedAt) / 1000);
-      // Clear the line each tick — the elapsed suffix changes width.
-      process.stdout.write(
-        `\r${ESC}2K${styled(f, ansi.cyan)} ${styled(message, ansi.dim)}${styled(` (${secs}s)`, ansi.dim)}`,
-      );
-      this.frame++;
-    }, 120);
-  }
-
-  stop(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    if (this.active && process.stdout.isTTY) {
-      clearLine();
-    }
-    this.active = false;
-    this.frame = 0;
-  }
-
-  pause<T>(fn: () => T): T {
-    this.stop();
-    const result = fn();
-    return result;
-  }
-}
-
 // ---------------------------------------------------------------------------
-// StreamRenderer — accumulates stream deltas + manages spinner lifecycle
-// ---------------------------------------------------------------------------
-
-export class StreamRenderer {
-  /** Holds the in-progress (not yet newline-terminated) line in markdown mode. */
-  private pending = "";
-  private started = false;
-  private readonly spinner: Spinner;
-  private readonly md = new MarkdownRenderer();
-  /** True when we style output line-by-line; false falls back to raw passthrough. */
-  private readonly useMarkdown: boolean;
-  streamed = false;
-
-  constructor(renderMarkdown: boolean) {
-    this.useMarkdown = renderMarkdown && isColorSupported();
-    this.spinner = new Spinner();
-    this.spinner.start();
-  }
-
-  async onDelta(delta: string): Promise<void> {
-    this.streamed = true;
-    this.pending += delta;
-
-    // Defer the turn bullet until the first non-blank content arrives.
-    if (!this.started) {
-      if (!this.pending.trim()) return;
-      this.spinner.stop();
-      process.stdout.write(`\n${styled("⏺", ansi.cyan)} `);
-      this.started = true;
-    }
-
-    if (!this.useMarkdown) {
-      // Raw passthrough — token-by-token, no styling.
-      process.stdout.write(this.pending);
-      this.pending = "";
-      return;
-    }
-
-    // Markdown mode: flush every complete line, holding the trailing partial.
-    let nl = this.pending.indexOf("\n");
-    while (nl !== -1) {
-      const line = this.pending.slice(0, nl);
-      process.stdout.write(this.md.renderLine(line) + "\n");
-      this.pending = this.pending.slice(nl + 1);
-      nl = this.pending.indexOf("\n");
-    }
-  }
-
-  async onEnd(opts: { resuming: boolean }): Promise<void> {
-    this.spinner.stop();
-
-    if (this.started) {
-      // Flush any trailing partial line through the renderer.
-      if (this.useMarkdown && this.pending.length > 0) {
-        process.stdout.write(this.md.renderLine(this.pending) + "\n");
-      } else {
-        process.stdout.write("\n");
-      }
-      this.pending = "";
-    }
-
-    if (opts.resuming) {
-      this.started = false;
-      this.spinner.start();
-    } else if (this.started) {
-      process.stdout.write("\n");
-    }
-  }
-
-  async close(): Promise<void> {
-    this.spinner.stop();
-  }
-
-  /** Stop the underlying spinner without flushing pending content. */
-  stopSpinner(): void {
-    this.spinner.stop();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tool-use status rendering
-// Maps a tool name + args to a human label, then renders an in-place
-// spinner→checkmark line per tool. No-ops outside a TTY.
+// Tool call labels — shared by the Ink UI's live tool rows.
 // ---------------------------------------------------------------------------
 
 /** Extract a file/dir basename from an arg value of unknown shape. */
@@ -386,13 +296,6 @@ function truncateCmd(cmd: unknown, max = 48): string {
   if (typeof cmd !== "string") return "";
   const c = cmd.trim().replace(/\s+/g, " ");
   return c.length > max ? `${c.slice(0, max - 1)}…` : c;
-}
-
-export interface ToolStatusLabel {
-  /** Label shown while the tool is running (with spinner). */
-  running: string;
-  /** Label shown when the tool finishes (with checkmark). */
-  done: string;
 }
 
 /**
@@ -425,84 +328,4 @@ export function toolCallLabel(name: string, args: Record<string, unknown>): stri
     }
   })();
   return arg ? `${name}(${arg})` : name;
-}
-
-/**
- * Map a tool name + its call args to a human-readable running/done label pair.
- * Unknown tools fall back to a capitalized form of the name.
- */
-export function toolStatusLabel(
-  name: string,
-  args: Record<string, unknown>,
-): ToolStatusLabel {
-  const path = pathBaseName(args["path"]);
-  const withPath = (verb: string, past: string): ToolStatusLabel => ({
-    running: path ? `${verb} ${path}` : verb,
-    done: path ? `${past}: ${path}` : past,
-  });
-  switch (name) {
-    case "write_file":
-      return withPath("Creating", "File created");
-    case "read_file":
-      return withPath("Reading", "Read");
-    case "edit_file":
-      return withPath("Editing", "Edited");
-    case "list_dir":
-      return withPath("Listing", "Listed");
-    case "exec": {
-      const c = truncateCmd(args["command"]);
-      return {
-        running: c ? `Running command: ${c}` : "Running command",
-        done: "Command finished",
-      };
-    }
-    case "cron":
-      return { running: "Scheduling task", done: "Task scheduled" };
-    case "web_search":
-      return { running: "Searching the web", done: "Web search done" };
-    case "web_fetch":
-      return { running: "Fetching URL", done: "Fetched URL" };
-    default: {
-      const cap = name ? name.charAt(0).toUpperCase() + name.slice(1) : "Tool";
-      return { running: cap, done: `${cap} done` };
-    }
-  }
-}
-
-/**
- * Renders a single tool's lifecycle claude-code style: an animated spinner
- * labelled with the call chip, replaced by a green/red ⏺ bullet line plus an
- * indented `⎿ result` summary. All methods are no-ops when stdout is not a TTY.
- */
-export class ToolStatusRenderer {
-  private readonly spinner = new Spinner();
-  private active = false;
-
-  start(label: string): void {
-    if (!process.stdout.isTTY) return;
-    this.spinner.stop();
-    this.spinner.start(`${label}…`);
-    this.active = true;
-  }
-
-  finish(label: string, ok = true, detail = ""): void {
-    if (!process.stdout.isTTY) return;
-    this.spinner.stop();
-    this.active = false;
-    const mark = ok ? styled("⏺", ansi.green) : styled("⏺", ansi.red);
-    process.stdout.write(`${mark} ${styled(label, ansi.bold)}\n`);
-    const summary = (detail.split("\n")[0] ?? "").trim();
-    if (summary) {
-      const capped = summary.length > 76 ? `${summary.slice(0, 75)}…` : summary;
-      process.stdout.write(`  ${styled(`⎿ ${capped}`, ansi.dim)}\n`);
-    }
-  }
-
-  /** Clear any active spinner without printing a result line. */
-  stop(): void {
-    if (this.active) {
-      this.spinner.stop();
-      this.active = false;
-    }
-  }
 }

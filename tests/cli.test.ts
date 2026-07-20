@@ -12,10 +12,10 @@ import {
   ansi,
   isColorSupported,
   printResponse,
-  toolStatusLabel,
   toolCallLabel,
   displayWidth,
-  ToolStatusRenderer,
+  theme,
+  nearest256,
 } from "../src/cli/render.js";
 import type { CommandContext } from "../src/command/router.js";
 import type { InboundMessage } from "../src/bus/events.js";
@@ -355,7 +355,7 @@ describe("markdownToAnsi (colored)", () => {
     const out = markdownToAnsi("## Title");
     expect(strip(out)).toBe("Title");
     expect(out).toContain(ansi.bold);
-    expect(out).toContain(ansi.cyan);
+    expect(out).toContain(theme.pink);
   });
 
   it("turns bullets into a • glyph", () => {
@@ -503,90 +503,6 @@ describe("parseArgs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// toolStatusLabel
-// ---------------------------------------------------------------------------
-
-describe("toolStatusLabel", () => {
-  it("write_file with path shows basename in running/done labels", () => {
-    const label = toolStatusLabel("write_file", { path: "/some/dir/foo.txt" });
-    expect(label.running).toBe("Creating foo.txt");
-    expect(label.done).toBe("File created: foo.txt");
-  });
-
-  it("write_file without path uses generic labels", () => {
-    const label = toolStatusLabel("write_file", {});
-    expect(label.running).toBe("Creating");
-    expect(label.done).toBe("File created");
-  });
-
-  it("read_file shows basename", () => {
-    const label = toolStatusLabel("read_file", { path: "/a/b/c.ts" });
-    expect(label.running).toBe("Reading c.ts");
-    expect(label.done).toBe("Read: c.ts");
-  });
-
-  it("edit_file shows basename", () => {
-    const label = toolStatusLabel("edit_file", { path: "src/main.ts" });
-    expect(label.running).toBe("Editing main.ts");
-    expect(label.done).toBe("Edited: main.ts");
-  });
-
-  it("list_dir shows basename", () => {
-    const label = toolStatusLabel("list_dir", { path: "/workspace/src" });
-    expect(label.running).toBe("Listing src");
-    expect(label.done).toBe("Listed: src");
-  });
-
-  it("exec with short command includes command snippet", () => {
-    const label = toolStatusLabel("exec", { command: "ls -la" });
-    expect(label.running).toContain("ls -la");
-    expect(label.done).toBe("Command finished");
-  });
-
-  it("exec truncates very long commands", () => {
-    const longCmd = "echo " + "x".repeat(100);
-    const label = toolStatusLabel("exec", { command: longCmd });
-    expect(label.running.length).toBeLessThan(longCmd.length + 20);
-    expect(label.running).toContain("…");
-  });
-
-  it("exec without command uses generic label", () => {
-    const label = toolStatusLabel("exec", {});
-    expect(label.running).toBe("Running command");
-  });
-
-  it("cron returns fixed labels", () => {
-    const label = toolStatusLabel("cron", {});
-    expect(label.running).toBe("Scheduling task");
-    expect(label.done).toBe("Task scheduled");
-  });
-
-  it("web_search returns fixed labels", () => {
-    const label = toolStatusLabel("web_search", {});
-    expect(label.running).toBe("Searching the web");
-    expect(label.done).toBe("Web search done");
-  });
-
-  it("web_fetch returns fixed labels", () => {
-    const label = toolStatusLabel("web_fetch", {});
-    expect(label.running).toBe("Fetching URL");
-    expect(label.done).toBe("Fetched URL");
-  });
-
-  it("unknown tool name uses capitalized name as fallback", () => {
-    const label = toolStatusLabel("my_custom_tool", {});
-    expect(label.running).toBe("My_custom_tool");
-    expect(label.done).toBe("My_custom_tool done");
-  });
-
-  it("empty name falls back gracefully", () => {
-    const label = toolStatusLabel("", {});
-    expect(label.running).toBe("Tool");
-    expect(label.done).toBe("Tool done");
-  });
-});
-
-// ---------------------------------------------------------------------------
 // toolCallLabel / displayWidth
 // ---------------------------------------------------------------------------
 
@@ -617,6 +533,19 @@ describe("toolCallLabel", () => {
   });
 });
 
+describe("nearest256", () => {
+  it("maps Dracula accents to their canonical xterm-256 indexes", () => {
+    expect(nearest256(189, 147, 249)).toBe(141); // purple
+    expect(nearest256(255, 121, 198)).toBe(212); // pink
+    expect(nearest256(80, 250, 123)).toBe(84); // green
+  });
+
+  it("maps near-grays onto the grayscale ramp", () => {
+    expect(nearest256(8, 8, 8)).toBe(232);
+    expect(nearest256(238, 238, 238)).toBe(255);
+  });
+});
+
 describe("displayWidth", () => {
   it("counts ASCII as 1 column and ignores ANSI codes", () => {
     expect(displayWidth("hello")).toBe(5);
@@ -626,28 +555,5 @@ describe("displayWidth", () => {
   it("counts emoji as 2 columns, skipping variation selectors", () => {
     expect(displayWidth("🕷️")).toBe(2);
     expect(displayWidth("a🕷️b")).toBe(4);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ToolStatusRenderer
-// ---------------------------------------------------------------------------
-
-describe("ToolStatusRenderer", () => {
-  it("is a no-op when stdout is not a TTY (start, finish, stop all safe)", () => {
-    // In CI / test runner stdout is not a TTY, so these should never throw.
-    const renderer = new ToolStatusRenderer();
-    expect(() => renderer.start("Doing something")).not.toThrow();
-    expect(() => renderer.finish("Done", true)).not.toThrow();
-    expect(() => renderer.finish("Failed", false)).not.toThrow();
-    expect(() => renderer.stop()).not.toThrow();
-  });
-
-  it("can be started and finished multiple times without error", () => {
-    const renderer = new ToolStatusRenderer();
-    for (let i = 0; i < 3; i++) {
-      renderer.start(`Step ${i}`);
-      renderer.finish(`Step ${i} done`, i % 2 === 0);
-    }
   });
 });

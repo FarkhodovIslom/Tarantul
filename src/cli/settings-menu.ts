@@ -1,12 +1,12 @@
 /**
  * Interactive `/settings` menu for the REPL: arrow keys to move, Enter to
  * select, Esc to go back/cancel. Owns stdin for its entire run (the caller
- * must `Repl.suspend()` first and `Repl.restore()` after — see
- * `keyboard.ts` for why a live `readline.Interface` can't coexist with raw
- * keypress reads) — no agent turn runs while it's active, so there's no
- * race with session writes. Every mutation goes through
- * {@link SettingsController}, which persists to disk and mutates the live
- * `Config` in place.
+ * must unmount whatever else is reading stdin first — the Ink app in
+ * `main.ts` — and remount it after; see `keyboard.ts` for why a raw keypress
+ * reader can't coexist with another stdin consumer) — no agent turn runs
+ * while it's active, so there's no race with session writes. Every mutation
+ * goes through {@link SettingsController}, which persists to disk and
+ * mutates the live `Config` in place.
  */
 
 import { formatUsageSummary, getSessionUsage } from "../agent/usage.js";
