@@ -48,6 +48,10 @@ interface State {
   busy: boolean;
   busyLabel: string | null;
   selector: PendingSelector | null;
+  /** Bumped on `clear`. Keys <Static> so it remounts and re-renders the
+   *  post-clear items — Ink's <Static> is otherwise append-only and silently
+   *  drops items once the list shrinks below its high-water index. */
+  generation: number;
 }
 
 type Action =
@@ -87,6 +91,7 @@ function initState(props: AppProps): State {
     busy: false,
     busyLabel: null,
     selector: null,
+    generation: 0,
   };
 }
 
@@ -158,7 +163,13 @@ function reduce(state: State, action: Action): State {
       return s;
     }
     case "clear":
-      return { ...state, items: [], liveAssistant: "", liveTools: [] };
+      return {
+        ...state,
+        items: [],
+        liveAssistant: "",
+        liveTools: [],
+        generation: state.generation + 1,
+      };
     default:
       return state;
   }
@@ -186,11 +197,6 @@ export function App(props: AppProps): React.ReactElement {
   useEffect(() => {
     if (state.selector) setSelIndex(0);
   }, [state.selector]);
-
-  // Editing resets the autocomplete highlight to the top match.
-  useEffect(() => {
-    setAcIndex(0);
-  }, [input]);
 
   const suggestions = input !== dismissedFor ? filterCommands(input) : [];
   const acVisible = !state.selector && !state.busy && suggestions.length > 0;
@@ -332,22 +338,28 @@ export function App(props: AppProps): React.ReactElement {
       if (cursor > 0) {
         setInput((s) => s.slice(0, cursor - 1) + s.slice(cursor));
         setCursor((c) => Math.max(0, c - 1));
+        setAcIndex(0); // editing re-highlights the top autocomplete match
       }
       return;
     }
     if (key.tab || key.ctrl || key.meta || !ch) return;
     setInput((s) => s.slice(0, cursor) + ch + s.slice(cursor));
     setCursor((c) => c + ch.length);
+    setAcIndex(0); // editing re-highlights the top autocomplete match
   });
 
   type StaticEntry = { id: number; banner: true } | TranscriptItem;
-  const staticItems: StaticEntry[] = props.showBanner
+  // Banner only on the initial screen (first process mount, before any clear).
+  // A `/new` or `/sessions` clear bumps `generation`, remounting <Static> so
+  // the post-clear items actually render — and drops the banner from then on.
+  const showBannerNow = props.showBanner && state.generation === 0;
+  const staticItems: StaticEntry[] = showBannerNow
     ? [{ id: 0, banner: true }, ...state.items]
     : state.items;
 
   return (
     <Box flexDirection="column">
-      <Static items={staticItems}>
+      <Static key={`static-${state.generation}`} items={staticItems}>
         {(entry) =>
           "banner" in entry ? (
             <Banner key="banner" version={props.version} model={props.model} />
