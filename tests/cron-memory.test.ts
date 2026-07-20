@@ -379,7 +379,7 @@ describe("MemoryStore", () => {
       { role: "user", content: "test message", timestamp: "2025-01-01T10:00:00" },
     ];
 
-    const ok = await store.consolidate(
+    const { ok } = await store.consolidate(
       messages,
       mockProvider as never,
       "mock",
@@ -419,7 +419,7 @@ describe("MemoryStore", () => {
       }),
     };
 
-    const ok = await store.consolidate(
+    const { ok } = await store.consolidate(
       [{ role: "user", content: "hello", timestamp: "2025-01-01T10:00:00" }],
       mockProvider as never,
       "mock",
@@ -457,7 +457,7 @@ describe("MemoryStore", () => {
       }),
     };
 
-    const ok = await store.consolidate(
+    const { ok } = await store.consolidate(
       [{ role: "user", content: "tell me about apollo", timestamp: "2025-01-01T10:00:00" }],
       mockProvider as never,
       "mock",
@@ -471,6 +471,73 @@ describe("MemoryStore", () => {
     expect(store.listNoteNames().sort()).toEqual(["Alice", "Apollo"]);
     // The curated index references the notes.
     expect(store.readLongTerm()).toContain("[[Apollo]]");
+  });
+
+  it("returns a sanitized title when suggestTitle is requested", async () => {
+    const store = new MemoryStore(tmpDir);
+    const mockProvider = {
+      generation: { temperature: 0.7, maxTokens: 4096, reasoningEffort: null },
+      getDefaultModel: () => "mock",
+      chatWithRetry: async () => ({
+        content: null,
+        toolCalls: [
+          {
+            id: "tc1",
+            name: "save_memory",
+            arguments: {
+              history_entry: "[2025-01-01 10:00] Talked about the trip.",
+              memory_update: "# Memory\nPlanning a trip.",
+              session_title: "  Trip\nto   Japan  ",
+            },
+          },
+        ],
+        finishReason: "tool_calls",
+        usage: {},
+      }),
+    };
+
+    const res = await store.consolidate(
+      [{ role: "user", content: "help plan japan", timestamp: "2025-01-01T10:00:00" }],
+      mockProvider as never,
+      "mock",
+      { suggestTitle: true },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.title).toBe("Trip to Japan"); // whitespace collapsed
+    // Memory still written as usual.
+    expect(store.readLongTerm()).toContain("Planning a trip");
+  });
+
+  it("omits the title when suggestTitle is not requested", async () => {
+    const store = new MemoryStore(tmpDir);
+    const mockProvider = {
+      generation: { temperature: 0.7, maxTokens: 4096, reasoningEffort: null },
+      getDefaultModel: () => "mock",
+      chatWithRetry: async () => ({
+        content: null,
+        toolCalls: [
+          {
+            id: "tc1",
+            name: "save_memory",
+            arguments: {
+              history_entry: "[2025-01-01 10:00] Talked.",
+              memory_update: "# Memory\nStuff.",
+              session_title: "Some Title The Model Volunteered",
+            },
+          },
+        ],
+        finishReason: "tool_calls",
+        usage: {},
+      }),
+    };
+
+    const res = await store.consolidate(
+      [{ role: "user", content: "hi", timestamp: "2025-01-01T10:00:00" }],
+      mockProvider as never,
+      "mock",
+    );
+    expect(res.ok).toBe(true);
+    expect(res.title).toBeUndefined();
   });
 
   it("fires onConsolidated (reindex hook) once after writing memory", async () => {

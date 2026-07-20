@@ -217,9 +217,15 @@ export class SessionManager {
     this.cache.delete(key);
   }
 
+  /** True if a session file for this key exists on disk (ignores the cache). */
+  hasSessionFile(key: string): boolean {
+    return existsSync(this._sessionPath(key));
+  }
+
   /** List all persisted sessions (reads only the first line of each file). */
   listSessions(): Array<{
     key: string;
+    title: string | undefined;
     createdAt: string | undefined;
     updatedAt: string | undefined;
     path: string;
@@ -249,8 +255,11 @@ export class SessionManager {
         const data = JSON.parse(firstLine) as Record<string, unknown>;
         if (data["_type"] !== "metadata") continue;
         const key = (data["key"] as string | undefined) ?? filePath.replace(/\.jsonl$/, "");
+        const meta = data["metadata"] as Record<string, unknown> | undefined;
+        const title = typeof meta?.["title"] === "string" ? (meta["title"] as string) : undefined;
         results.push({
           key,
+          title,
           createdAt: data["created_at"] as string | undefined,
           updatedAt: data["updated_at"] as string | undefined,
           path: filePath,

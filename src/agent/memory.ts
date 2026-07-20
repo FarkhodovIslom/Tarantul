@@ -77,6 +77,12 @@ const SAVE_MEMORY_TOOL: Record<string, unknown>[] = [
               required: ["name", "content"],
             },
           },
+          session_title: {
+            type: "string",
+            description:
+              "Short 3-6 word title naming this conversation, written in the conversation's own " +
+              "language. Only provide when the prompt explicitly asks for a title.",
+          },
         },
         required: ["history_entry", "memory_update"],
       },
@@ -118,9 +124,12 @@ function parseNotes(raw: unknown): ParsedNote[] {
   return out;
 }
 
-function normalizeArgs(
-  args: unknown,
-): { historyEntry: string; memoryUpdate: string; notes: ParsedNote[] } | null {
+function normalizeArgs(args: unknown): {
+  historyEntry: string;
+  memoryUpdate: string;
+  notes: ParsedNote[];
+  sessionTitle: string | null;
+} | null {
   let obj: Record<string, unknown> | null = null;
   if (typeof args === "string") {
     try {
@@ -140,11 +149,31 @@ function normalizeArgs(
   const memoryUpdate = (obj["memory_update"] ?? obj["memoryUpdate"]) as string | undefined;
   if (!historyEntry || !memoryUpdate) return null;
 
+  const rawTitle = obj["session_title"] ?? obj["sessionTitle"];
+  const sessionTitle =
+    typeof rawTitle === "string" && rawTitle.trim() ? sanitizeTitle(rawTitle) : null;
+
   return {
     historyEntry: typeof historyEntry === "string" ? historyEntry : JSON.stringify(historyEntry),
     memoryUpdate: typeof memoryUpdate === "string" ? memoryUpdate : JSON.stringify(memoryUpdate),
     notes: parseNotes(obj["notes"]),
+    sessionTitle,
   };
+}
+
+/** Max characters kept from a model-suggested session title. */
+const TITLE_MAX_CHARS = 60;
+
+/** Collapse whitespace and cap length for a model-suggested session title. */
+function sanitizeTitle(raw: string): string {
+  const clean = raw.replace(/\s+/g, " ").trim();
+  return clean.length > TITLE_MAX_CHARS ? clean.slice(0, TITLE_MAX_CHARS).trimEnd() : clean;
+}
+
+/** Outcome of a consolidation pass; `title` is present only when requested and returned. */
+export interface ConsolidateResult {
+  ok: boolean;
+  title?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +329,9 @@ export class MemoryStore {
     messages: Record<string, unknown>[],
     provider: LLMProvider,
     model: string,
-  ): Promise<boolean> {
-    if (!messages.length) return true;
+    opts?: { suggestTitle?: boolean },
+  ): Promise<ConsolidateResult> {
+    if (!messages.length) return { ok: true };
 
     const currentMemory = this.readLongTerm();
     const existingNotes = this.listNoteNames();
@@ -310,6 +340,10 @@ export class MemoryStore {
       `## Current Long-term Memory (MEMORY.md)\n${currentMemory || "(empty)"}\n\n` +
       `## Existing Notes\n${existingNotes.length ? existingNotes.map((n) => `[[${n}]]`).join(", ") : "(none)"}\n\n` +
       `## Conversation to Process\n${MemoryStore.formatMessages(messages)}`;
+
+    const titleLine = opts?.suggestTitle
+      ? "\n- session_title: a short 3-6 word title for this conversation, in the same language the user wrote in."
+      : "";
 
     const chatMessages: Record<string, unknown>[] = [
       {
@@ -322,8 +356,9 @@ export class MemoryStore {
           "Reuse existing note names when they apply, and connect related notes with [[Other Note]] " +
           "wikilinks inside each note's content.\n" +
           "- memory_update: the curated MEMORY.md index of the most important durable facts, " +
-          "referencing notes with [[Note Name]].\n" +
-          "Do not invent facts. Prefer linking over duplicating.",
+          "referencing notes with [[Note Name]]." +
+          titleLine +
+          "\nDo not invent facts. Prefer linking over duplicating.",
       },
       { role: "user", content: prompt },
     ];
@@ -352,19 +387,19 @@ export class MemoryStore {
           { finishReason: response.finishReason },
           "Memory consolidation: LLM did not call save_memory",
         );
-        return this._failOrRawArchive(messages);
+        return { ok: this._failOrRawArchive(messages) };
       }
 
       const parsed = normalizeArgs(response.toolCalls[0]!.arguments);
       if (!parsed) {
         logger.warn("Memory consolidation: unexpected save_memory arguments");
-        return this._failOrRawArchive(messages);
+        return { ok: this._failOrRawArchive(messages) };
       }
 
       const entry = parsed.historyEntry.trim();
       if (!entry) {
         logger.warn("Memory consolidation: history_entry is empty");
-        return this._failOrRawArchive(messages);
+        return { ok: this._failOrRawArchive(messages) };
       }
 
       this.appendDaily(entry);
@@ -391,10 +426,11 @@ export class MemoryStore {
         { count: messages.length, notes: parsed.notes.length },
         "Memory consolidation done",
       );
-      return true;
+      const title = opts?.suggestTitle ? parsed.sessionTitle : null;
+      return title ? { ok: true, title } : { ok: true };
     } catch (err) {
       logger.error({ err }, "Memory consolidation failed");
-      return this._failOrRawArchive(messages);
+      return { ok: this._failOrRawArchive(messages) };
     }
   }
 
@@ -620,7 +656,9 @@ export class MemoryConsolidator {
           "Memory consolidation round",
         );
 
-        const ok = await this.stores.for(session.key).consolidate(chunk, this.provider, this.model);
+        const { ok } = await this.stores
+          .for(session.key)
+          .consolidate(chunk, this.provider, this.model);
         if (!ok) return;
         changed = true;
 

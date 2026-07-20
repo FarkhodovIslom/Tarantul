@@ -250,6 +250,41 @@ describe("SessionManager", () => {
     expect(s2).not.toBe(s);
     expect(s2.messages.length).toBe(1);
   });
+
+  it("listSessions surfaces metadata.title", async () => {
+    const mgr = new SessionManager(tmpDir);
+    const s = mgr.getOrCreate("cli:titled");
+    s.addMessage("user", "hi");
+    s.metadata["title"] = "My Titled Chat";
+    await mgr.save(s);
+
+    const list = mgr.listSessions();
+    const entry = list.find((e) => e.key === "cli:titled");
+    expect(entry?.title).toBe("My Titled Chat");
+  });
+
+  it("listSessions leaves title undefined when unset", async () => {
+    const mgr = new SessionManager(tmpDir);
+    const s = mgr.getOrCreate("cli:untitled");
+    s.addMessage("user", "hi");
+    await mgr.save(s);
+
+    const entry = mgr.listSessions().find((e) => e.key === "cli:untitled");
+    expect(entry?.title).toBeUndefined();
+  });
+
+  it("hasSessionFile reflects on-disk presence, ignoring the cache", async () => {
+    const mgr = new SessionManager(tmpDir);
+    // getOrCreate caches but does not write — file must not exist yet.
+    mgr.getOrCreate("cli:nofile");
+    expect(mgr.hasSessionFile("cli:nofile")).toBe(false);
+
+    const s = mgr.getOrCreate("cli:hasfile");
+    s.addMessage("user", "hi");
+    await mgr.save(s);
+    expect(mgr.hasSessionFile("cli:hasfile")).toBe(true);
+    expect(mgr.hasSessionFile("cli:never")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

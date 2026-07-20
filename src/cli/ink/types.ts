@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import type { PermissionRequest } from "../../agent/tools/base.js";
 
 /** A finalized transcript entry, rendered once inside Ink's <Static>. */
 export type TranscriptItem =
@@ -14,8 +13,39 @@ export interface RunningTool {
   label: string;
 }
 
-/** User's answer to a permission prompt. */
+/** User's answer to a permission prompt. Emitted at the main.ts call site. */
 export type PermDecision = "yes" | "no" | "always";
+
+/** One selectable row in a {@link SelectorSpec} overlay. */
+export interface SelectOption {
+  label: string;
+  /** Dim inline detail, e.g. a relative timestamp. */
+  detail?: string;
+}
+
+/**
+ * Declarative spec for the generic arrow-key selector overlay, reused by the
+ * permission prompt, the summarize-on-leave confirm, and the /sessions picker.
+ */
+export interface SelectorSpec {
+  /** Header line (accent-colored). */
+  title: string;
+  /** Optional dim context lines under the header. */
+  body?: string[];
+  options: readonly SelectOption[];
+  /** What Esc resolves to: an option index, or null = cancel. */
+  escResolvesTo: number | null;
+  /** Border/header accent: "warn" = orange (permission), "info" = purple. */
+  accent: "warn" | "info";
+  /** Footer hint override. */
+  hint?: string;
+}
+
+/** One replayed transcript line when resuming a session. */
+export interface ReplayEntry {
+  role: "user" | "assistant";
+  text: string;
+}
 
 /** Events the turn runner pushes to the UI via {@link UiBridge}. */
 export type UiEvent =
@@ -24,8 +54,9 @@ export type UiEvent =
   | { t: "tool-start"; id: string; label: string }
   | { t: "tool-end"; id: string; ok: boolean; detail: string }
   | { t: "notice"; text: string; tone: "info" | "error" }
-  | { t: "busy"; value: boolean }
-  | { t: "permission"; req: PermissionRequest; resolve: (decision: PermDecision) => void }
+  | { t: "busy"; value: boolean; label?: string }
+  | { t: "select"; spec: SelectorSpec; resolve: (index: number | null) => void }
+  | { t: "replay"; entries: ReplayEntry[] }
   | { t: "clear" };
 
 /**

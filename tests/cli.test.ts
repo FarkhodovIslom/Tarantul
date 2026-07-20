@@ -461,6 +461,7 @@ describe("styled", () => {
 // ---------------------------------------------------------------------------
 
 import { parseArgs } from "../src/cli/main.js";
+import { SLASH_COMMANDS, filterCommands } from "../src/cli/ink/commands.js";
 
 describe("parseArgs", () => {
   it("parses positional arguments", () => {
@@ -555,5 +556,48 @@ describe("displayWidth", () => {
   it("counts emoji as 2 columns, skipping variation selectors", () => {
     expect(displayWidth("🕷️")).toBe(2);
     expect(displayWidth("a🕷️b")).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slash-command autocomplete
+// ---------------------------------------------------------------------------
+
+describe("SLASH_COMMANDS", () => {
+  it("every entry has a slash name and a description; core commands present", () => {
+    for (const c of SLASH_COMMANDS) {
+      expect(c.name.startsWith("/")).toBe(true);
+      expect(c.description.length).toBeGreaterThan(0);
+    }
+    const names = SLASH_COMMANDS.map((c) => c.name);
+    for (const want of ["/help", "/new", "/sessions", "/settings"]) {
+      expect(names).toContain(want);
+    }
+  });
+
+  it("has no duplicate names", () => {
+    const names = SLASH_COMMANDS.map((c) => c.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe("filterCommands", () => {
+  it("returns [] for non-slash or spaced input", () => {
+    expect(filterCommands("")).toEqual([]);
+    expect(filterCommands("hello")).toEqual([]);
+    expect(filterCommands("/new arg")).toEqual([]); // space = has args
+  });
+
+  it("prefix-filters case-insensitively", () => {
+    expect(filterCommands("/").length).toBe(SLASH_COMMANDS.length);
+    const se = filterCommands("/se").map((c) => c.name);
+    expect(se).toContain("/sessions");
+    expect(se).toContain("/settings");
+    expect(se).not.toContain("/help");
+    expect(filterCommands("/HE").map((c) => c.name)).toEqual(["/help"]);
+  });
+
+  it("returns [] when nothing matches", () => {
+    expect(filterCommands("/zzz")).toEqual([]);
   });
 });

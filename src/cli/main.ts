@@ -34,13 +34,23 @@ import { getCronDir } from "../config/paths.js";
 import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
 import { SettingsController } from "../config/settings.js";
 import { CronService } from "../cron/service.js";
+import { createProvider } from "../providers/factory.js";
+import { type Session, SessionManager } from "../session/manager.js";
+import { BUILTIN_SKILLS_DIR, SkillsLoader } from "../skills/index.js";
+import {
+  CLI_MEMORY_KEY,
+  fallbackTitle,
+  isCliSessionKey,
+  newCliSessionId,
+  relativeTime,
+  resolveActiveCliSession,
+  untitledLabel,
+  writeActivePointer,
+} from "./chat-sessions.js";
 import { InkHook } from "./ink/InkHook.js";
 import { mountApp } from "./ink/run.js";
-import type { PermDecision } from "./ink/types.js";
+import type { PermDecision, ReplayEntry, SelectOption, SelectorSpec } from "./ink/types.js";
 import { UiBridge } from "./ink/types.js";
-import { createProvider } from "../providers/factory.js";
-import { SessionManager } from "../session/manager.js";
-import { BUILTIN_SKILLS_DIR, SkillsLoader } from "../skills/index.js";
 import { runOnboarding } from "./onboarding.js";
 import { ansi, printProgress, printResponse, styled } from "./render.js";
 import { CliHistory, readStdin } from "./repl.js";
@@ -396,7 +406,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
 async function cmdAgent(args: ParsedArgs): Promise<void> {
   const configPath = flagStr(args, "config", "c");
   const workspace = flagStr(args, "workspace", "w");
-  const sessionId = flagStr(args, "session", "s") ?? "cli:direct";
+  const explicitSession = flagStr(args, "session", "s");
   const oneShot = flagStr(args, "message", "m");
   const renderMarkdown = !flagBool(args, "no-markdown");
   const showLogs = flagBool(args, "logs");
@@ -427,6 +437,18 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
 
   // Session manager
   const sessions = new SessionManager(wsPath);
+
+  // Active chat session. Chat history is per-session; long-term memory is
+  // shared across all CLI chats under CLI_MEMORY_KEY (see runTurn bindings).
+  // An explicit `-s` flag pins a session and never touches the pointer file.
+  let currentSessionId: string;
+  if (explicitSession) {
+    currentSessionId = explicitSession;
+  } else {
+    const resolved = resolveActiveCliSession(wsPath, (k) => sessions.hasSessionFile(k));
+    currentSessionId = resolved.key;
+    writeActivePointer(wsPath, currentSessionId);
+  }
 
   // Interactive permission prompt: when the workspace guard blocks a command
   // or path, ask the user instead of hard-denying. Only wired for the TTY
@@ -471,8 +493,9 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       }),
     );
   }
-  // Memory tools — same long-term memory suite as the gateway; this REPL is a
-  // single session, so we bind it to `sessionId` in runTurn.
+  // Memory tools — same long-term memory suite as the gateway. All CLI chats
+  // share one long-term memory under CLI_MEMORY_KEY (bound per turn in runTurn),
+  // independent of which per-chat history session is active.
   let memoryService: MemorySearchService | null = null;
   if (cfg.tools.memory.enable) {
     memoryService = buildMemoryService(cfg, wsPath);
@@ -519,14 +542,14 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // runTurnInk below instead, which streams into the Ink UI.
   // -----------------------------------------------------------------------
   async function runTurn(userMessage: string): Promise<string | null> {
-    memoryService?.setSessionKey(sessionId);
-    const session = sessions.getOrCreate(sessionId);
+    memoryService?.setSessionKey(CLI_MEMORY_KEY);
+    const session = sessions.getOrCreate(currentSessionId);
     const history = session.getHistory(0);
 
     const messages = buildMessages({
       history,
       currentMessage: userMessage,
-      systemPrompt: getSystemPrompt(sessionId),
+      systemPrompt: getSystemPrompt(CLI_MEMORY_KEY),
       channel: "cli",
       chatId: "direct",
     });
@@ -601,14 +624,14 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   async function runTurnInk(bridge: UiBridge, userMessage: string): Promise<void> {
     bridge.emitEvent({ t: "busy", value: true });
     try {
-      memoryService?.setSessionKey(sessionId);
-      const session = sessions.getOrCreate(sessionId);
+      memoryService?.setSessionKey(CLI_MEMORY_KEY);
+      const session = sessions.getOrCreate(currentSessionId);
       const history = session.getHistory(0);
 
       const messages = buildMessages({
         history,
         currentMessage: userMessage,
-        systemPrompt: getSystemPrompt(sessionId),
+        systemPrompt: getSystemPrompt(CLI_MEMORY_KEY),
         channel: "cli",
         chatId: "direct",
       });
@@ -651,19 +674,153 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     }
   }
 
-  // Dispatch one submitted line: slash command (mirrors the CommandRouter
-  // semantics used by every other front end) or, falling through, a normal
-  // chat turn. Unrecognized slash text is intentionally sent to the model —
-  // matching CommandRouter.dispatch()'s existing fallthrough for non-priority
-  // commands it doesn't recognize.
+  // Ask the Ink app to show an arrow-key selector; resolves the chosen index
+  // (or null on cancel). The mount loop rebinds `bridge` each pass, so this is
+  // parameterized rather than closing over a single bridge.
+  function promptSelect(bridge: UiBridge, spec: SelectorSpec): Promise<number | null> {
+    return new Promise((res) => bridge.emitEvent({ t: "select", spec, resolve: res }));
+  }
+
+  // Last N user/assistant lines of a session, for resume-context replay.
+  function buildReplay(session: Session, limit = 10): ReplayEntry[] {
+    return session.messages
+      .filter(
+        (m) =>
+          (m["role"] === "user" || m["role"] === "assistant") &&
+          typeof m["content"] === "string" &&
+          (m["content"] as string).trim() !== "",
+      )
+      .slice(-limit)
+      .map((m) => ({ role: m["role"] as "user" | "assistant", text: m["content"] as string }));
+  }
+
+  // Shared "leaving this chat" flow — run before exit, `/new`, and `/sessions`
+  // switches. When the session has unconsolidated content, offer to summarize
+  // it to (shared) memory + generate a title; otherwise fall back to a title
+  // derived from the first user message. Always persists the session.
+  async function switchAway(bridge: UiBridge): Promise<void> {
+    const session = sessions.getOrCreate(currentSessionId);
+    const pending = session.messages.slice(session.lastConsolidated);
+    const hasContent = pending.some(
+      (m) =>
+        (m["role"] === "user" || m["role"] === "assistant") &&
+        typeof m["content"] === "string" &&
+        (m["content"] as string).trim() !== "",
+    );
+    if (!hasContent) return;
+
+    const choice = await promptSelect(bridge, {
+      title: "Summarize this session to memory?",
+      options: [{ label: "Yes" }, { label: "No" }],
+      escResolvesTo: 1, // Esc = No
+      accent: "info",
+    });
+
+    if (choice === 0) {
+      bridge.emitEvent({ t: "busy", value: true, label: "Summarizing session…" });
+      try {
+        const { ok, title } = await memoryStores
+          .for(CLI_MEMORY_KEY)
+          .consolidate(pending, provider, cfg.agents.defaults.model, { suggestTitle: true });
+        if (ok) {
+          session.lastConsolidated = session.messages.length;
+          if (title) session.metadata["title"] = title;
+        }
+      } catch {
+        // fall through to the fallback title below
+      } finally {
+        bridge.emitEvent({ t: "busy", value: false });
+      }
+      try {
+        if (memoryService) await memoryService.reindex(CLI_MEMORY_KEY);
+      } catch {
+        // reindex is best-effort — search still works on next lazy index
+      }
+    }
+
+    if (typeof session.metadata["title"] !== "string") {
+      const fb = fallbackTitle(session);
+      if (fb) session.metadata["title"] = fb;
+    }
+    await sessions.save(session);
+  }
+
+  // `/new`: summarize-away, then rotate to a fresh chat session + clear the UI.
+  async function cmdNewChat(bridge: UiBridge): Promise<void> {
+    const current = sessions.getOrCreate(currentSessionId);
+    if (current.messages.length === 0) {
+      bridge.emitEvent({ t: "notice", text: "Already a fresh session.", tone: "info" });
+      return;
+    }
+    await switchAway(bridge);
+    let id = newCliSessionId();
+    while (sessions.hasSessionFile(id)) id = `${id}-2`; // same-second collision guard
+    currentSessionId = id;
+    if (!explicitSession) writeActivePointer(wsPath, id);
+    bridge.emitEvent({ t: "clear" });
+    bridge.emitEvent({ t: "notice", text: "New session started.", tone: "info" });
+  }
+
+  // `/sessions`: pick a saved CLI chat and switch to it (summarize-away first),
+  // replaying its recent context into the transcript.
+  async function cmdSessions(bridge: UiBridge): Promise<void> {
+    const list = sessions.listSessions().filter((s) => isCliSessionKey(s.key));
+    if (list.length === 0) {
+      bridge.emitEvent({ t: "notice", text: "No saved sessions yet.", tone: "info" });
+      return;
+    }
+    const options: SelectOption[] = list.map((s) => {
+      const label =
+        (s.title ?? untitledLabel(s.key)) + (s.key === currentSessionId ? "  (current)" : "");
+      const detail = relativeTime(s.updatedAt);
+      return detail ? { label, detail } : { label };
+    });
+    const idx = await promptSelect(bridge, {
+      title: "Switch session",
+      options,
+      escResolvesTo: null, // Esc = cancel
+      accent: "info",
+      hint: "↑↓ select · enter switch · esc cancel",
+    });
+    if (idx === null) return;
+    const picked = list[idx];
+    if (!picked) return;
+    if (picked.key === currentSessionId) {
+      bridge.emitEvent({ t: "notice", text: "Already on this session.", tone: "info" });
+      return;
+    }
+    await switchAway(bridge);
+    currentSessionId = picked.key;
+    if (!explicitSession) writeActivePointer(wsPath, picked.key);
+    const target = sessions.getOrCreate(picked.key);
+    bridge.emitEvent({ t: "clear" });
+    const replay = buildReplay(target);
+    if (replay.length) bridge.emitEvent({ t: "replay", entries: replay });
+    const title = (target.metadata["title"] as string | undefined) ?? untitledLabel(picked.key);
+    bridge.emitEvent({ t: "notice", text: `Resumed: ${title}`, tone: "info" });
+  }
+
+  // Dispatch one submitted line: CLI-only chat commands (`/new`, `/sessions`)
+  // are intercepted here before the router (which would otherwise send them to
+  // the model); other slash commands mirror the CommandRouter semantics used by
+  // every other front end; anything else is a normal chat turn.
   async function handleSlashOrMessage(bridge: UiBridge, line: string): Promise<void> {
+    const cmd = line.trim().toLowerCase();
+    if (cmd === "/new") {
+      await cmdNewChat(bridge);
+      return;
+    }
+    if (cmd === "/sessions") {
+      await cmdSessions(bridge);
+      return;
+    }
     if (line.startsWith("/")) {
       const dummyMsg = { channel: "cli", senderId: "user", chatId: "direct", content: line };
       if (router.isPriority(line)) {
         const resp = await router.dispatchPriority({
           msg: dummyMsg,
-          session: sessions.getOrCreate(sessionId),
-          key: sessionId,
+          session: sessions.getOrCreate(currentSessionId),
+          key: currentSessionId,
           raw: line,
           args: "",
           loop: null,
@@ -673,15 +830,14 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       }
       const resp = await router.dispatch({
         msg: dummyMsg,
-        session: sessions.getOrCreate(sessionId),
-        key: sessionId,
+        session: sessions.getOrCreate(currentSessionId),
+        key: currentSessionId,
         raw: line,
         args: "",
         loop: null,
       });
       if (resp) {
         bridge.emitEvent({ t: "notice", text: resp.content, tone: "info" });
-        if (line === "/new") bridge.emitEvent({ t: "clear" });
         return;
       }
     }
@@ -691,6 +847,12 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   // "always" approves permission prompts for the rest of this session,
   // surviving a `/settings` remount below.
   let alwaysAllow = false;
+  const PERMISSION_OPTIONS: readonly SelectOption[] = [
+    { label: "Yes" },
+    { label: "Yes, and don't ask again this session" },
+    { label: "No" },
+  ];
+  const PERMISSION_DECISIONS: readonly PermDecision[] = ["yes", "always", "no"];
 
   // Remount loop: a fresh Ink instance + UiBridge per pass. `/settings` needs
   // exclusive raw stdin (see keyboard.ts), so its handler unmounts the current
@@ -704,9 +866,15 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
 
     promptPermission = async (req) => {
       if (alwaysAllow) return true;
-      const decision = await new Promise<PermDecision>((resolveDecision) => {
-        bridge.emitEvent({ t: "permission", req, resolve: resolveDecision });
+      const idx = await promptSelect(bridge, {
+        title: `🔐 ${req.reason.replace(/^Error:\s*/, "")}`,
+        body: [`${req.tool}: ${req.action}`],
+        options: PERMISSION_OPTIONS,
+        escResolvesTo: 2, // Esc = No
+        accent: "warn",
+        hint: "↑↓ select · enter confirm · esc no",
       });
+      const decision = PERMISSION_DECISIONS[idx ?? 2] ?? "no";
       if (decision === "always") alwaysAllow = true;
       return decision !== "no";
     };
@@ -719,11 +887,13 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       statusRight: wsDisplay,
       showBanner: firstMount,
       history: cliHistory.all,
+      initialTranscript: buildReplay(sessions.getOrCreate(currentSessionId)),
       onSubmit: (line) => handleSlashOrMessage(bridge, line),
       onHistoryPush: (line) => cliHistory.push(line),
       onSettings: () => {
         settingsRequested = true;
       },
+      onBeforeExit: () => switchAway(bridge),
     });
 
     await app.waitUntilExit();
@@ -733,7 +903,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     await runSettingsMenu({
       controller: settings,
       skillsLoader,
-      getSession: () => sessions.getOrCreate(sessionId),
+      getSession: () => sessions.getOrCreate(currentSessionId),
     });
   }
 

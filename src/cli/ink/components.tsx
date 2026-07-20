@@ -2,8 +2,9 @@ import { Box, Text } from "ink";
 import type React from "react";
 import { useEffect, useState } from "react";
 import { markdownToAnsi, toolCallLabel } from "../render.js";
+import { SLASH_COMMANDS, type SlashCommand } from "./commands.js";
 import { dracula } from "./theme.js";
-import type { RunningTool, TranscriptItem } from "./types.js";
+import type { RunningTool, SelectorSpec, TranscriptItem } from "./types.js";
 
 /** Two-tone block logotype (matches the legacy renderer). */
 const BLOCK_LOGO: [string, string] = [
@@ -11,15 +12,6 @@ const BLOCK_LOGO: [string, string] = [
   " █  █▀█ █▀▄ █▀█ █ █  █  █▄█ █▄▄",
 ];
 const LOGO_SPLIT = 20;
-
-const COMMANDS: Array<[string, string]> = [
-  ["/help", "show help"],
-  ["/new", "start a new session"],
-  ["/status", "model & session status"],
-  ["/settings", "provider, model & options"],
-  ["/stop", "cancel the running task"],
-  ["exit", "quit"],
-];
 
 export function Banner({ version, model }: { version: string; model: string }): React.ReactElement {
   return (
@@ -32,12 +24,16 @@ export function Banner({ version, model }: { version: string; model: string }): 
       ))}
       <Text color={dracula.comment}>{`🕷️ v${version} · ${model}`}</Text>
       <Box marginTop={1} flexDirection="column">
-        {COMMANDS.map(([cmd, desc]) => (
-          <Text key={cmd}>
-            <Text color={dracula.purple}>{cmd.padEnd(12)}</Text>
-            <Text color={dracula.comment}>{desc}</Text>
+        {SLASH_COMMANDS.map((c) => (
+          <Text key={c.name}>
+            <Text color={dracula.purple}>{c.name.padEnd(12)}</Text>
+            <Text color={dracula.comment}>{c.description}</Text>
           </Text>
         ))}
+        <Text key="exit">
+          <Text color={dracula.purple}>{"exit".padEnd(12)}</Text>
+          <Text color={dracula.comment}>quit</Text>
+        </Text>
       </Box>
     </Box>
   );
@@ -103,13 +99,17 @@ export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
         </Box>
       );
     case "assistant":
+      // Footer only when a model is known — mid-turn flushes and replayed
+      // history carry an empty model and must not render a bare " ()" line.
       return (
         <BorderedBlock color={dracula.purple}>
           <Text>
             <Text color={dracula.purple}>{"⏺ "}</Text>
             {markdownToAnsi(item.text)}
           </Text>
-          <Text color={dracula.comment}>{`${item.model} (${item.time})`}</Text>
+          {item.model ? (
+            <Text color={dracula.comment}>{`${item.model} (${item.time})`}</Text>
+          ) : null}
         </BorderedBlock>
       );
     case "tool":
@@ -150,10 +150,13 @@ export function LiveRegion({
   assistant,
   tools,
   busy,
+  busyLabel,
 }: {
   assistant: string;
   tools: RunningTool[];
   busy: boolean;
+  /** Override for the spinner label (e.g. "Summarizing session…"); null = default. */
+  busyLabel: string | null;
 }): React.ReactElement | null {
   if (!busy && !assistant && tools.length === 0) return null;
   return (
@@ -172,7 +175,7 @@ export function LiveRegion({
           </Text>
         </BorderedBlock>
       ) : null}
-      {busy ? <Spinner label={assistant ? "Writing…" : "Thinking…"} /> : null}
+      {busy ? <Spinner label={busyLabel ?? (assistant ? "Writing…" : "Thinking…")} /> : null}
     </Box>
   );
 }
@@ -216,47 +219,70 @@ export function InputBar({
   );
 }
 
-/** Options shown by {@link PermissionPrompt}, in display order. */
-export const PERMISSION_OPTIONS = ["Yes", "Yes, and don't ask again this session", "No"] as const;
-
 /**
- * Permission request prompt shown in place of the input bar: an arrow-key
- * selectable list (claude-code style) rather than a y/a/n keypress prompt.
- * Selection state lives in the parent (App) alongside the rest of its input
- * handling; this component is presentational only.
+ * Generic arrow-key selector shown in place of the input bar — reused by the
+ * permission prompt, the summarize-on-leave confirm, and the /sessions picker.
+ * Purely presentational; selection state lives in the parent (App).
  */
-export function PermissionPrompt({
-  tool,
-  action,
-  reason,
+export function SelectPrompt({
+  spec,
   selectedIndex,
 }: {
-  tool: string;
-  action: string;
-  reason: string;
+  spec: SelectorSpec;
   selectedIndex: number;
 }): React.ReactElement {
+  const accent = spec.accent === "warn" ? dracula.orange : dracula.purple;
+  const hint = spec.hint ?? "↑↓ select · enter confirm · esc cancel";
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={dracula.orange} paddingX={1}>
-      <Text color={dracula.orange}>{`🔐 ${reason.replace(/^Error:\s*/, "")}`}</Text>
-      <Text>
-        <Text color={dracula.comment}>{`${tool}: `}</Text>
-        <Text>{action}</Text>
-      </Text>
+    <Box flexDirection="column" borderStyle="round" borderColor={accent} paddingX={1}>
+      <Text color={accent}>{spec.title}</Text>
+      {(spec.body ?? []).map((line) => (
+        <Text key={line} color={dracula.comment}>
+          {line}
+        </Text>
+      ))}
       <Box flexDirection="column" marginTop={1}>
-        {PERMISSION_OPTIONS.map((label, i) => {
+        {spec.options.map((opt, i) => {
           const selected = i === selectedIndex;
           return (
-            <Text key={label}>
+            <Text key={`${opt.label}-${i}`}>
               <Text color={dracula.green}>{selected ? "• " : "  "}</Text>
               <Text color={selected ? dracula.fg : dracula.comment} bold={selected}>
-                {label}
+                {opt.label}
               </Text>
+              {opt.detail ? <Text color={dracula.comment}>{`  ${opt.detail}`}</Text> : null}
             </Text>
           );
         })}
       </Box>
-      <Text color={dracula.comment}>↑↓ select · enter confirm · esc no</Text>
+      <Text color={dracula.comment}>{hint}</Text>
+    </Box>
+  );
+}
+
+/** Typing-time slash-command autocomplete list, shown above the input bar. */
+export function SuggestionList({
+  items,
+  selectedIndex,
+}: {
+  items: readonly SlashCommand[];
+  selectedIndex: number;
+}): React.ReactElement {
+  return (
+    <Box flexDirection="column">
+      {items.map((c, i) => {
+        const selected = i === selectedIndex;
+        return (
+          <Text key={c.name}>
+            <Text color={dracula.green}>{selected ? "• " : "  "}</Text>
+            <Text color={selected ? dracula.fg : dracula.purple} bold={selected}>
+              {c.name.padEnd(12)}
+            </Text>
+            <Text color={dracula.comment}>{c.description}</Text>
+          </Text>
+        );
+      })}
+      <Text color={dracula.comment}>↑↓ select · tab complete · enter run · esc dismiss</Text>
     </Box>
   );
 }
