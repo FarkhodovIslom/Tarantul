@@ -336,18 +336,34 @@ export class OpenAICompatProvider extends LLMProvider {
     try {
       const kwargs = this.buildKwargs(opts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await this.client.chat.completions.create(kwargs as any);
+      const response = await this.client.chat.completions.create(kwargs as any, {
+        signal: opts.signal ?? undefined,
+      });
       return parseResponse(response);
     } catch (err) {
+      if (opts.signal?.aborted) {
+        return { content: null, toolCalls: [], finishReason: "cancelled", usage: {} };
+      }
       return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
     }
   }
 
   override async chatStream(opts: ChatStreamOptions): Promise<LLMResponse> {
+    // Hoisted above the try block (not just declared inline) so a
+    // caller-triggered abort can still return whatever streamed before it
+    // fired, instead of discarding the partial reply in the catch below.
+    let content = "";
+    const toolCallsMap = new Map<number, { name: string; args: string }>();
+    let finishReason = "stop";
+    let usage: Record<string, number> = {};
+    let reasoningContent = "";
     try {
       const kwargs = this.buildKwargs(opts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream: AsyncIterable<Record<string, unknown>> = await this.client.chat.completions.create({ ...kwargs, stream: true } as any) as any;
+      const stream: AsyncIterable<Record<string, unknown>> = await this.client.chat.completions.create(
+        { ...kwargs, stream: true } as any,
+        { signal: opts.signal ?? undefined },
+      ) as any;
 
       // Accumulate streaming response.
       // Tool-call ids are minted fresh below (shortToolId()), same as the
@@ -356,12 +372,6 @@ export class OpenAICompatProvider extends LLMProvider {
       // (UUIDs, empty strings, etc.) across the 25 OpenAI-compatible specs
       // this provider supports. So there's nothing to accumulate per-index
       // here beyond name/args.
-      let content = "";
-      const toolCallsMap = new Map<number, { name: string; args: string }>();
-      let finishReason = "stop";
-      let usage: Record<string, number> = {};
-      let reasoningContent = "";
-
       for await (const chunk of stream) {
         const choices = (chunk["choices"] as Record<string, unknown>[]) ?? [];
         for (const choice of choices) {
@@ -392,6 +402,21 @@ export class OpenAICompatProvider extends LLMProvider {
         if (chunk["usage"]) usage = extractUsage(chunk);
       }
 
+      // An abort can end the async iterator quietly (no throw) rather than
+      // rejecting it, depending on how the underlying fetch surfaces the
+      // cancellation — so the loop above may exit "successfully" partway
+      // through. Check the signal explicitly instead of only relying on the
+      // catch block below.
+      if (opts.signal?.aborted) {
+        return {
+          content: content || null,
+          toolCalls: [],
+          finishReason: "cancelled",
+          usage,
+          reasoningContent: reasoningContent || null,
+        };
+      }
+
       const toolCalls: ToolCallRequest[] = [];
       for (const [, entry] of toolCallsMap) {
         let args: unknown;
@@ -411,6 +436,15 @@ export class OpenAICompatProvider extends LLMProvider {
         reasoningContent: reasoningContent || null,
       };
     } catch (err) {
+      if (opts.signal?.aborted) {
+        return {
+          content: content || null,
+          toolCalls: [],
+          finishReason: "cancelled",
+          usage,
+          reasoningContent: reasoningContent || null,
+        };
+      }
       return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
     }
   }

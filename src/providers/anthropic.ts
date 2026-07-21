@@ -385,19 +385,30 @@ export class AnthropicProvider extends LLMProvider {
     try {
       const kwargs = this.buildKwargs(opts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await this.client.messages.create(kwargs as any);
+      const response = await this.client.messages.create(kwargs as any, {
+        signal: opts.signal ?? undefined,
+      });
       return parseResponse(response as Anthropic.Message);
     } catch (err) {
+      if (opts.signal?.aborted) {
+        return { content: null, toolCalls: [], finishReason: "cancelled", usage: {} };
+      }
       return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
     }
   }
 
   override async chatStream(opts: ChatStreamOptions): Promise<LLMResponse> {
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Tracked outside the try block (not just relied on via the SDK's stream
+    // object) so a caller-triggered abort can still return whatever text
+    // streamed before it fired, instead of discarding the partial reply.
+    let accumulated = "";
     try {
       const kwargs = this.buildKwargs(opts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream = this.client.messages.stream(kwargs as any);
+      const stream = this.client.messages.stream(kwargs as any, {
+        signal: opts.signal ?? undefined,
+      });
 
       // Enforce an idle timeout: `streamEvent` fires for every chunk the SDK
       // processes (whether consumed via the async iterator or finalMessage()
@@ -420,14 +431,26 @@ export class AnthropicProvider extends LLMProvider {
             event.delta.type === "text_delta" &&
             opts.onContentDelta
           ) {
+            accumulated += event.delta.text;
             await opts.onContentDelta(event.delta.text);
           }
         }
       }
 
+      // An abort can end the manual iteration quietly (no throw) rather than
+      // rejecting it — check the signal explicitly instead of only relying on
+      // the catch block, and skip finalMessage() (which needs the completed
+      // stream state abort just tore down).
+      if (opts.signal?.aborted) {
+        return { content: accumulated || null, toolCalls: [], finishReason: "cancelled", usage: {} };
+      }
+
       const response = await stream.finalMessage();
       return parseResponse(response);
     } catch (err) {
+      if (opts.signal?.aborted) {
+        return { content: accumulated || null, toolCalls: [], finishReason: "cancelled", usage: {} };
+      }
       const msg = String(err);
       if (msg.includes("stalled") || msg.includes("timeout") || msg.includes("Request was aborted")) {
         return {

@@ -48,6 +48,8 @@ export interface AgentRunSpec {
   providerRetryMode?: "standard" | "persistent";
   progressCallback?: ((msg: string) => Promise<void>) | null;
   checkpointCallback?: ((payload: Record<string, unknown>) => Promise<void>) | null;
+  /** Aborts the run at the next safe boundary (model call in flight, or between iterations). */
+  signal?: AbortSignal | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,14 @@ export class AgentRunner {
     const toolTokens = spec.contextWindowTokens ? estimateToolTokens(spec.tools) : 0;
 
     for (let iteration = 0; iteration < spec.maxIterations; iteration++) {
+      // A stop request between iterations (e.g. right after a tool batch
+      // finishes) is honored here; one still in flight is caught below once
+      // the model call itself returns the "cancelled" sentinel.
+      if (spec.signal?.aborted) {
+        stopReason = "cancelled";
+        break;
+      }
+
       // -----------------------------------------------------------------------
       // Context governance — in-place mutations, no list copies.
       // -----------------------------------------------------------------------
@@ -130,6 +140,34 @@ export class AgentRunner {
       ctx.usage = { ...rawUsage };
       ctx.toolCalls = response.toolCalls.slice();
       accumulateUsage(usage, rawUsage);
+
+      // -----------------------------------------------------------------------
+      // Cancelled mid-call — finalize whatever text streamed before the abort
+      // (if any) as a normal assistant message instead of discarding it, then
+      // stop. Whatever usage the provider reported before the abort is kept
+      // (accumulated above) since it reflects real token spend.
+      // -----------------------------------------------------------------------
+      if (response.finishReason === "cancelled") {
+        stopReason = "cancelled";
+        const partial = hook.finalizeContent(ctx, response.content);
+        if (hook.wantsStreaming()) {
+          await hook.onStreamEnd(ctx, { resuming: false });
+        }
+        if (!isBlankText(partial)) {
+          buf.append(
+            buildAssistantMessage(partial, {
+              ...(response.reasoningContent != null
+                ? { reasoningContent: response.reasoningContent }
+                : {}),
+            }),
+          );
+          finalContent = partial;
+        }
+        ctx.finalContent = finalContent;
+        ctx.stopReason = stopReason;
+        await hook.afterIteration(ctx);
+        break;
+      }
 
       // -----------------------------------------------------------------------
       // Tool call branch
@@ -325,6 +363,7 @@ export class AgentRunner {
       model: spec.model,
       retryMode: spec.providerRetryMode ?? "standard",
       onRetryWait: spec.progressCallback ?? null,
+      signal: spec.signal ?? null,
       ...(spec.temperature != null ? { temperature: spec.temperature } : {}),
       ...(spec.maxTokens != null ? { maxTokens: spec.maxTokens } : {}),
       ...(spec.reasoningEffort != null ? { reasoningEffort: spec.reasoningEffort } : {}),
@@ -350,6 +389,7 @@ export class AgentRunner {
       tools: null,
       model: spec.model,
       retryMode: spec.providerRetryMode ?? "standard",
+      signal: spec.signal ?? null,
       ...(spec.temperature != null ? { temperature: spec.temperature } : {}),
       ...(spec.maxTokens != null ? { maxTokens: spec.maxTokens } : {}),
       ...(spec.reasoningEffort != null ? { reasoningEffort: spec.reasoningEffort } : {}),

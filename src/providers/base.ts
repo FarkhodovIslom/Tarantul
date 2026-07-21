@@ -66,7 +66,17 @@ export interface ChatOptions {
   temperature?: number;
   reasoningEffort?: string | null;
   toolChoice?: string | Record<string, unknown> | null;
+  /** Aborts the in-flight request when triggered (e.g. a user "stop" action). */
+  signal?: AbortSignal | null;
 }
+
+/** Sentinel response for a call that never went out because the signal was already aborted. */
+const CANCELLED_RESPONSE: LLMResponse = {
+  content: null,
+  toolCalls: [],
+  finishReason: "cancelled",
+  usage: {},
+};
 
 export interface ChatStreamOptions extends ChatOptions {
   onContentDelta?: ContentDeltaCallback | null;
@@ -348,6 +358,8 @@ export abstract class LLMProvider {
     let identicalErrorCount = 0;
 
     while (true) {
+      if (opts.signal?.aborted) return CANCELLED_RESPONSE;
+
       attempt++;
       const response = await call(opts);
 

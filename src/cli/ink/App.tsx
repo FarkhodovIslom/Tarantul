@@ -33,6 +33,8 @@ export interface AppProps {
   /** Switch-away flow (summarize prompt etc.) awaited before the app exits.
    *  Must always settle; the app exits once it does. */
   onBeforeExit: () => Promise<void>;
+  /** Aborts the in-flight turn. Returns false if nothing was running. */
+  onStop: () => boolean;
 }
 
 interface PendingSelector {
@@ -190,6 +192,10 @@ export function App(props: AppProps): React.ReactElement {
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   // Guards the exit flow: first request runs onBeforeExit; a second force-quits.
   const exitingRef = useRef(false);
+  // True once a Ctrl-C stop has been requested for the turn currently
+  // running — reset as soon as busy clears. Lets a second Ctrl-C force-quit
+  // if the stop itself never resolves (e.g. a provider that ignores abort).
+  const stopRequestedRef = useRef(false);
 
   useEffect(() => props.bridge.onEvent((e) => dispatch({ type: "event", e })), [props.bridge]);
 
@@ -197,6 +203,12 @@ export function App(props: AppProps): React.ReactElement {
   useEffect(() => {
     if (state.selector) setSelIndex(0);
   }, [state.selector]);
+
+  // A turn ending (naturally or via stop) clears the "already asked to stop"
+  // guard so the next turn's first Ctrl-C is a plain stop request again.
+  useEffect(() => {
+    if (!state.busy) stopRequestedRef.current = false;
+  }, [state.busy]);
 
   const suggestions = input !== dismissedFor ? filterCommands(input) : [];
   const acVisible = !state.selector && !state.busy && suggestions.length > 0;
@@ -263,9 +275,20 @@ export function App(props: AppProps): React.ReactElement {
       return;
     }
 
-    // 2. Ctrl-C runs the exit flow (or force-quits mid-summarize).
+    // 2. Ctrl-C: stop the running turn if one is busy, otherwise exit. A
+    // second Ctrl-C after a stop was already requested force-quits, in case
+    // the turn never actually stops (e.g. a provider that ignores abort).
     if (key.ctrl && ch === "c") {
-      requestExit();
+      if (state.busy) {
+        if (stopRequestedRef.current) {
+          requestExit();
+        } else {
+          stopRequestedRef.current = true;
+          props.onStop();
+        }
+      } else {
+        requestExit();
+      }
       return;
     }
 

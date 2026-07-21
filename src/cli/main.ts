@@ -622,11 +622,23 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   const cliHistory = new CliHistory(getCliHistoryPath());
   const wsDisplay = wsPath.replace(homedir(), "~");
 
+  // The in-flight turn's abort controller, if any — set for the duration of
+  // runTurnInk() below so a Ctrl-C (or other "stop") request has something to
+  // cancel. stopCurrentTurn() is a no-op when nothing is running.
+  let activeController: AbortController | null = null;
+  function stopCurrentTurn(): boolean {
+    if (!activeController) return false;
+    activeController.abort();
+    return true;
+  }
+
   // Run one turn, streaming its lifecycle (assistant text, tool calls, notices)
   // into the given bridge instead of returning a value — the Ink app maps
   // these events to transcript state as they arrive.
   async function runTurnInk(bridge: UiBridge, userMessage: string): Promise<void> {
     bridge.emitEvent({ t: "busy", value: true });
+    const controller = new AbortController();
+    activeController = controller;
     try {
       memoryService?.setSessionKey(CLI_MEMORY_KEY);
       const session = sessions.getOrCreate(currentSessionId);
@@ -652,6 +664,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
         progressCallback: async (msg) => bridge.emitEvent({ t: "notice", text: msg, tone: "info" }),
         hook,
+        signal: controller.signal,
       });
 
       // A provider that returns content without ever streaming deltas would
@@ -662,6 +675,9 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       } else if (!hook.didStream && result.finalContent) {
         bridge.emitEvent({ t: "assistant-delta", text: result.finalContent });
         bridge.emitEvent({ t: "assistant-end", model: cfg.agents.defaults.model });
+      }
+      if (result.stopReason === "cancelled") {
+        bridge.emitEvent({ t: "notice", text: "Stopped.", tone: "info" });
       }
 
       const now = new Date().toISOString();
@@ -680,6 +696,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     } catch (err) {
       bridge.emitEvent({ t: "notice", text: `Error: ${err}`, tone: "error" });
     } finally {
+      activeController = null;
       bridge.emitEvent({ t: "busy", value: false });
     }
   }
@@ -960,6 +977,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         settingsRequested = true;
       },
       onBeforeExit: () => switchAway(bridge),
+      onStop: () => stopCurrentTurn(),
     });
 
     await app.waitUntilExit();

@@ -8,7 +8,9 @@ import {
   sanitizeEmptyContent,
   sanitizeRequestMessages,
   stripImageContent,
+  LLMProvider,
 } from "../src/providers/base.js";
+import type { ChatOptions, LLMResponse } from "../src/providers/base.js";
 
 // ---------------------------------------------------------------------------
 // sanitizeEmptyContent
@@ -285,5 +287,44 @@ describe("stripImageContent", () => {
     const result = stripImageContent(msgs);
     expect(result).not.toBeNull();
     expect(result![0]!["content"]).toBe("system prompt"); // unchanged
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LLMProvider.chatWithRetry — abort short-circuit
+// ---------------------------------------------------------------------------
+
+class CountingProvider extends LLMProvider {
+  calls = 0;
+  getDefaultModel(): string {
+    return "mock-model";
+  }
+  async chat(_opts: ChatOptions): Promise<LLMResponse> {
+    this.calls++;
+    return { content: "hi", toolCalls: [], finishReason: "stop", usage: {} };
+  }
+}
+
+describe("LLMProvider.chatWithRetry", () => {
+  it("returns a cancelled response without calling chat() when the signal is already aborted", async () => {
+    const provider = new CountingProvider();
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await provider.chatWithRetry({
+      messages: [{ role: "user", content: "hi" }],
+      signal: controller.signal,
+    });
+
+    expect(result.finishReason).toBe("cancelled");
+    expect(provider.calls).toBe(0);
+  });
+
+  it("calls chat() normally when no signal is passed", async () => {
+    const provider = new CountingProvider();
+    const result = await provider.chatWithRetry({ messages: [{ role: "user", content: "hi" }] });
+
+    expect(result.finishReason).toBe("stop");
+    expect(provider.calls).toBe(1);
   });
 });

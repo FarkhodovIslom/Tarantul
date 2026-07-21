@@ -224,7 +224,9 @@ export function InputBar({
         <Text color={dracula.fg}>{after}</Text>
       </Box>
       <Box justifyContent="space-between" paddingX={1}>
-        <Text color={dracula.comment}>enter send · /help commands · exit quit</Text>
+        <Text color={dracula.comment}>
+          {disabled ? "ctrl+c stop" : "enter send · /help commands · exit quit"}
+        </Text>
         <Text color={dracula.comment}>{hintRight}</Text>
       </Box>
       <Box justifyContent="space-between" paddingX={1}>

@@ -388,6 +388,130 @@ describe("AgentRunner", () => {
 });
 
 // ---------------------------------------------------------------------------
+// AgentRunner — cancellation (signal / "stop" support)
+// ---------------------------------------------------------------------------
+
+describe("AgentRunner — cancellation", () => {
+  it("a pre-aborted signal stops before any provider call", async () => {
+    let calls = 0;
+    const provider = {
+      generation: { temperature: 0.7, maxTokens: 4096, reasoningEffort: null },
+      getDefaultModel: () => "mock-model",
+      async chat(_opts: ChatOptions) {
+        calls++;
+        return { content: "should not happen", toolCalls: [], finishReason: "stop", usage: {} };
+      },
+      chatWithRetry(opts: ChatOptions) {
+        return this.chat(opts);
+      },
+      chatStreamWithRetry(opts: ChatOptions) {
+        return this.chat(opts);
+      },
+    };
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    const result = await runner.run({
+      initialMessages: [{ role: "user", content: "hi" }],
+      tools: makeRegistry(),
+      model: "mock-model",
+      maxIterations: 5,
+      maxToolResultChars: 4000,
+      signal: controller.signal,
+    });
+
+    expect(result.stopReason).toBe("cancelled");
+    expect(result.finalContent).toBeNull();
+    expect(calls).toBe(0);
+  });
+
+  it("finalizes and persists partial content when the model call is cancelled mid-stream", async () => {
+    const provider = new MockProvider([
+      {
+        content: "partial answer before stop",
+        toolCalls: [],
+        finishReason: "cancelled",
+        usage: { prompt_tokens: 10, completion_tokens: 4 },
+      },
+    ]);
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    const result = await runner.run({
+      ...makeSpec(provider, [
+        { role: "system", content: "sys" },
+        { role: "user", content: "hi" },
+      ]),
+    });
+
+    expect(result.stopReason).toBe("cancelled");
+    expect(result.finalContent).toBe("partial answer before stop");
+    expect(result.error).toBeNull();
+    const last = result.messages[result.messages.length - 1] as Record<string, unknown>;
+    expect(last["role"]).toBe("assistant");
+    expect(last["content"]).toBe("partial answer before stop");
+    expect(result.usage["completion_tokens"]).toBe(4);
+  });
+
+  it("drops an empty cancelled response without appending an assistant message", async () => {
+    const provider = new MockProvider([
+      { content: null, toolCalls: [], finishReason: "cancelled", usage: {} },
+    ]);
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    const initial = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "hi" },
+    ];
+    const result = await runner.run({
+      ...makeSpec(provider, initial),
+    });
+
+    expect(result.stopReason).toBe("cancelled");
+    expect(result.finalContent).toBeNull();
+    expect(result.messages.length).toBe(initial.length); // nothing appended
+  });
+
+  it("honors an abort signaled between tool-call iterations", async () => {
+    const { Tool } = await import("../src/agent/tools/base.js");
+    const controller = new AbortController();
+    class AbortingTool extends Tool {
+      readonly name = "abort_after";
+      readonly description = "Aborts the controller as a side effect";
+      readonly parameters = { type: "object", properties: {} };
+      async execute() {
+        controller.abort();
+        return "done";
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new AbortingTool());
+
+    const provider = new MockProvider([
+      {
+        content: null,
+        toolCalls: [{ id: "t1", name: "abort_after", arguments: {} }],
+        finishReason: "tool_calls",
+        usage: {},
+      },
+      { content: "should never be reached", toolCalls: [], finishReason: "stop", usage: {} },
+    ]);
+
+    const runner = new AgentRunner(provider as unknown as LLMProvider);
+    const result = await runner.run({
+      initialMessages: [{ role: "user", content: "go" }],
+      tools: registry,
+      model: "mock-model",
+      maxIterations: 5,
+      maxToolResultChars: 4000,
+      signal: controller.signal,
+    });
+
+    expect(result.stopReason).toBe("cancelled");
+    expect(result.finalContent).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AgentRunner — onToolStart / onToolEnd hook integration
 // ---------------------------------------------------------------------------
 
