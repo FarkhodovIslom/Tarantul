@@ -123,7 +123,23 @@ export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
   }
 }
 
-const SPINNER_FRAMES = ["✢", "✳", "✻", "✽", "✻", "✳"];
+/**
+ * Spinner glyph packs. One is picked at random per process start (not per
+ * spinner instance, so it stays consistent for the whole run) rather than
+ * hard-coding a single fixed set — the old `✢ ✳ ✻ ✽` pulse read as a
+ * straight Claude Code lookalike.
+ */
+const SPINNER_PACKS: readonly (readonly string[])[] = [
+  ["⭑", "✶", "✷", "✸", "✹"],
+  ["☆", "★", "✮", "★", "☆"],
+  ["𒅒", "𒈔", "𒅒", "𒇫", "𒄆"],
+  ["𓆝", "𓆟", "𓆞", "𓆝", "𓆟"],
+  ["🂡", "🂱", "🃁", "🃑", "🃟"],
+  ["◐", "◓", "◑", "◒", "◐"],
+];
+
+const SPINNER_FRAMES: readonly string[] =
+  SPINNER_PACKS[Math.floor(Math.random() * SPINNER_PACKS.length)] ?? SPINNER_PACKS[0]!;
 
 /** Pulsing-asterisk spinner with an elapsed-seconds suffix. */
 export function Spinner({ label }: { label: string }): React.ReactElement {
