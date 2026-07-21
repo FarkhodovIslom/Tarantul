@@ -880,9 +880,15 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
   }
 
   // Dispatch one submitted line: CLI-only chat commands (`/new`, `/sessions`,
-  // `/delete`) are intercepted here before the router (which would otherwise
-  // send them to the model); other slash commands mirror the CommandRouter
-  // semantics used by every other front end; anything else is a normal chat turn.
+  // `/delete`, `/stop`) are intercepted here before the router (which would
+  // otherwise send them to the model); other slash commands mirror the
+  // CommandRouter semantics used by every other front end; anything else is
+  // a normal chat turn. `/stop` while actually busy is handled directly in
+  // the Ink app (App.tsx) since input submission is normally blocked mid-turn
+  // — this branch only fires for a `/stop` typed while idle, so it always
+  // reports "nothing to stop" (the router's built-in cmdStop can't see this
+  // CLI's in-flight turn at all, since it only knows about the channel-loop
+  // task registry the CLI doesn't use).
   async function handleSlashOrMessage(bridge: UiBridge, line: string): Promise<void> {
     const cmd = line.trim().toLowerCase();
     if (cmd === "/new") {
@@ -895,6 +901,15 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     }
     if (cmd === "/delete") {
       await cmdDeleteSession(bridge);
+      return;
+    }
+    if (cmd === "/stop") {
+      const stopped = stopCurrentTurn();
+      bridge.emitEvent({
+        t: "notice",
+        text: stopped ? "Stopped." : "No active task to stop.",
+        tone: "info",
+      });
       return;
     }
     if (line.startsWith("/")) {

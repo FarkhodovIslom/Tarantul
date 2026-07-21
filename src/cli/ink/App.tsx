@@ -292,8 +292,46 @@ export function App(props: AppProps): React.ReactElement {
       return;
     }
 
-    // 3. While a turn / summarization runs, ignore edits (Ctrl-C still lands above).
-    if (state.busy) return;
+    // 3. While a turn runs, basic editing still works (so a message isn't
+    // lost while composing it), but only "/stop" can submit early — it's the
+    // typed equivalent of Ctrl-C above. Any other Enter press is a no-op
+    // until the turn ends, when it can be sent normally. History nav and
+    // autocomplete stay off (acVisible already requires !state.busy).
+    if (state.busy) {
+      if (key.return) {
+        if (input.trim().toLowerCase() === "/stop") {
+          setInput("");
+          setCursor(0);
+          dispatch({ type: "submit-user", text: "/stop" });
+          if (stopRequestedRef.current) {
+            requestExit();
+          } else {
+            stopRequestedRef.current = true;
+            props.onStop();
+          }
+        }
+        return;
+      }
+      if (key.leftArrow) {
+        setCursor((c) => Math.max(0, c - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        setCursor((c) => Math.min(input.length, c + 1));
+        return;
+      }
+      if (key.backspace || key.delete) {
+        if (cursor > 0) {
+          setInput((s) => s.slice(0, cursor - 1) + s.slice(cursor));
+          setCursor((c) => Math.max(0, c - 1));
+        }
+        return;
+      }
+      if (key.tab || key.ctrl || key.meta || !ch) return;
+      setInput((s) => s.slice(0, cursor) + ch + s.slice(cursor));
+      setCursor((c) => c + ch.length);
+      return;
+    }
 
     // 4. Autocomplete list steals navigation/confirm keys while visible.
     if (acVisible) {

@@ -196,7 +196,12 @@ export function LiveRegion({
   );
 }
 
-/** Bottom-docked tinted input bar + hint row + status row. */
+/**
+ * Bottom-docked tinted input bar + hint row + status row.
+ * `disabled` (true while a turn is busy) only dims the prompt color and swaps
+ * the hint text — typing still works while busy (so "/stop" can be entered),
+ * so the cursor block always renders.
+ */
 export function InputBar({
   value,
   cursor,
@@ -220,12 +225,12 @@ export function InputBar({
       <Box backgroundColor={dracula.selection} paddingX={1}>
         <Text color={disabled ? dracula.comment : dracula.pink}>{"> "}</Text>
         <Text color={dracula.fg}>{before}</Text>
-        {disabled ? null : <Text inverse>{at}</Text>}
+        <Text inverse>{at}</Text>
         <Text color={dracula.fg}>{after}</Text>
       </Box>
       <Box justifyContent="space-between" paddingX={1}>
         <Text color={dracula.comment}>
-          {disabled ? "ctrl+c stop" : "enter send · /help commands · exit quit"}
+          {disabled ? "ctrl+c or /stop to cancel" : "enter send · /help commands · exit quit"}
         </Text>
         <Text color={dracula.comment}>{hintRight}</Text>
       </Box>
