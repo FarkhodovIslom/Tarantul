@@ -232,6 +232,16 @@ function renderBlockLine(l: string): string {
   if (bullet) {
     return `${bullet[1]}${styled("•", theme.purple)} ${inlineMarkdown(bullet[2]!)}`;
   }
+  // Table separator row  |---|---|
+  if (/^\s*\|(?:-[-:| ]*)+\|\s*$/.test(l)) {
+    return styled(l, theme.comment);
+  }
+
+  // Table data row  | cell | cell |
+  if (/^\s*\|.*\|\s*$/.test(l)) {
+    const inline = inlineMarkdown(l);
+    return inline.replace(/\|/g, styled("|", theme.comment));
+  }
 
   return inlineMarkdown(l);
 }

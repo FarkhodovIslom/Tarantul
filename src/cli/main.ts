@@ -656,7 +656,10 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
 
       // A provider that returns content without ever streaming deltas would
       // otherwise vanish silently — surface it as a single completed block.
-      if (!hook.didStream && result.finalContent) {
+      if (result.stopReason === "error" || result.stopReason === "tool_error") {
+        bridge.emitEvent({ t: "assistant-delta", text: "\n\n" + (result.finalContent ?? "") });
+        bridge.emitEvent({ t: "assistant-end", model: cfg.agents.defaults.model });
+      } else if (!hook.didStream && result.finalContent) {
         bridge.emitEvent({ t: "assistant-delta", text: result.finalContent });
         bridge.emitEvent({ t: "assistant-end", model: cfg.agents.defaults.model });
       }

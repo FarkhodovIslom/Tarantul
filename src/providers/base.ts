@@ -199,8 +199,11 @@ export function sanitizeRequestMessages(
     for (const [k, v] of Object.entries(msg)) {
       if (allowedKeys.has(k)) clean[k] = v;
     }
-    if (clean["role"] === "assistant" && !("content" in clean)) {
-      clean["content"] = null;
+    if (clean["role"] === "assistant") {
+      const c = clean["content"];
+      if (c === null || c === "" || !("content" in clean)) {
+        delete clean["content"];
+      }
     }
     return clean;
   });
