@@ -567,12 +567,21 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     });
 
     const now = new Date().toISOString();
-    session.messages.push(
-      { role: "user", content: userMessage, timestamp: now },
-      ...(result.finalContent
-        ? [{ role: "assistant", content: result.finalContent, timestamp: now }]
-        : []),
-    );
+    // Persist the full turn: user + all assistant/tool-call/tool-result messages
+    // produced by the runner so the model sees its own tool results on the next turn.
+    const newMsgs = result.messages.slice(messages.length);
+    if (newMsgs.length > 0) {
+      // The runner already appended everything in order — just stamp timestamps.
+      for (const m of newMsgs) {
+        session.messages.push({ ...m, timestamp: now });
+      }
+    } else {
+      // Fallback: at minimum record user + final text.
+      session.messages.push({ role: "user", content: userMessage, timestamp: now });
+      if (result.finalContent) {
+        session.messages.push({ role: "assistant", content: result.finalContent, timestamp: now });
+      }
+    }
     session.updatedAt = new Date();
     recordTurnUsage(session, result.usage, cfg.agents.defaults.model);
     await sessions.save(session);
@@ -658,12 +667,19 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       }
 
       const now = new Date().toISOString();
-      session.messages.push(
-        { role: "user", content: userMessage, timestamp: now },
-        ...(result.finalContent
-          ? [{ role: "assistant", content: result.finalContent, timestamp: now }]
-          : []),
-      );
+      // Persist the full turn: user + all assistant/tool-call/tool-result messages
+      // produced by the runner so the model sees its own tool results on the next turn.
+      const newMsgs = result.messages.slice(messages.length);
+      if (newMsgs.length > 0) {
+        for (const m of newMsgs) {
+          session.messages.push({ ...m, timestamp: now });
+        }
+      } else {
+        session.messages.push({ role: "user", content: userMessage, timestamp: now });
+        if (result.finalContent) {
+          session.messages.push({ role: "assistant", content: result.finalContent, timestamp: now });
+        }
+      }
       session.updatedAt = new Date();
       recordTurnUsage(session, result.usage, cfg.agents.defaults.model);
       await sessions.save(session);
