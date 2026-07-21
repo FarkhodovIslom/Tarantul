@@ -285,6 +285,26 @@ describe("SessionManager", () => {
     expect(mgr.hasSessionFile("cli:hasfile")).toBe(true);
     expect(mgr.hasSessionFile("cli:never")).toBe(false);
   });
+
+  it("deleteSession removes the file, the cache entry, and reports whether a file existed", async () => {
+    const mgr = new SessionManager(tmpDir);
+    const s = mgr.getOrCreate("cli:doomed");
+    s.addMessage("user", "hi");
+    await mgr.save(s);
+    expect(mgr.hasSessionFile("cli:doomed")).toBe(true);
+
+    expect(mgr.deleteSession("cli:doomed")).toBe(true);
+    expect(mgr.hasSessionFile("cli:doomed")).toBe(false);
+
+    // A fresh getOrCreate after deletion must not resurrect the old messages.
+    const reloaded = mgr.getOrCreate("cli:doomed");
+    expect(reloaded.messages.length).toBe(0);
+  });
+
+  it("deleteSession returns false and is a no-op for a key with no file", async () => {
+    const mgr = new SessionManager(tmpDir);
+    expect(mgr.deleteSession("cli:never-existed")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

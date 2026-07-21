@@ -810,10 +810,62 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     bridge.emitEvent({ t: "notice", text: `Resumed: ${title}`, tone: "info" });
   }
 
-  // Dispatch one submitted line: CLI-only chat commands (`/new`, `/sessions`)
-  // are intercepted here before the router (which would otherwise send them to
-  // the model); other slash commands mirror the CommandRouter semantics used by
-  // every other front end; anything else is a normal chat turn.
+  // `/delete`: pick a saved CLI chat and permanently remove it (confirm first).
+  // Deleting the active session rotates to a fresh one afterward; no
+  // summarize-on-leave prompt here since the session's being discarded anyway.
+  async function cmdDeleteSession(bridge: UiBridge): Promise<void> {
+    const list = sessions.listSessions().filter((s) => isCliSessionKey(s.key));
+    if (list.length === 0) {
+      bridge.emitEvent({ t: "notice", text: "No saved sessions yet.", tone: "info" });
+      return;
+    }
+    const options: SelectOption[] = list.map((s) => {
+      const label =
+        (s.title ?? untitledLabel(s.key)) + (s.key === currentSessionId ? "  (current)" : "");
+      const detail = relativeTime(s.updatedAt);
+      return detail ? { label, detail } : { label };
+    });
+    const idx = await promptSelect(bridge, {
+      title: "Delete session",
+      options,
+      escResolvesTo: null, // Esc = cancel
+      accent: "warn",
+      hint: "↑↓ select · enter choose · esc cancel",
+    });
+    if (idx === null) return;
+    const picked = list[idx];
+    if (!picked) return;
+
+    const label = picked.title ?? untitledLabel(picked.key);
+    const confirmIdx = await promptSelect(bridge, {
+      title: `Delete "${label}"?`,
+      body: ["This cannot be undone."],
+      options: [{ label: "Yes, delete" }, { label: "No" }],
+      escResolvesTo: 1, // Esc = No
+      accent: "warn",
+    });
+    if (confirmIdx !== 0) return;
+
+    const wasCurrent = picked.key === currentSessionId;
+    sessions.deleteSession(picked.key);
+
+    if (!wasCurrent) {
+      bridge.emitEvent({ t: "notice", text: `Deleted "${label}".`, tone: "info" });
+      return;
+    }
+
+    let id = newCliSessionId();
+    while (sessions.hasSessionFile(id)) id = `${id}-2`; // same-second collision guard
+    currentSessionId = id;
+    if (!explicitSession) writeActivePointer(wsPath, id);
+    bridge.emitEvent({ t: "clear" });
+    bridge.emitEvent({ t: "notice", text: `Deleted "${label}". Started a new session.`, tone: "info" });
+  }
+
+  // Dispatch one submitted line: CLI-only chat commands (`/new`, `/sessions`,
+  // `/delete`) are intercepted here before the router (which would otherwise
+  // send them to the model); other slash commands mirror the CommandRouter
+  // semantics used by every other front end; anything else is a normal chat turn.
   async function handleSlashOrMessage(bridge: UiBridge, line: string): Promise<void> {
     const cmd = line.trim().toLowerCase();
     if (cmd === "/new") {
@@ -822,6 +874,10 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     }
     if (cmd === "/sessions") {
       await cmdSessions(bridge);
+      return;
+    }
+    if (cmd === "/delete") {
+      await cmdDeleteSession(bridge);
       return;
     }
     if (line.startsWith("/")) {

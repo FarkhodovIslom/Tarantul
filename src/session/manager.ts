@@ -1,6 +1,6 @@
 
 import { join } from "node:path";
-import { existsSync, mkdirSync, renameSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, openSync, readSync, closeSync, unlinkSync } from "node:fs";
 import { logger } from "../utils/logger.js";
 import { safeFilename, findLegalMessageStart } from "../utils/helpers.js";
 
@@ -220,6 +220,20 @@ export class SessionManager {
   /** True if a session file for this key exists on disk (ignores the cache). */
   hasSessionFile(key: string): boolean {
     return existsSync(this._sessionPath(key));
+  }
+
+  /** Permanently remove a session's file and cache entry. Returns whether a file was deleted. */
+  deleteSession(key: string): boolean {
+    this.cache.delete(key);
+    const path = this._sessionPath(key);
+    if (!existsSync(path)) return false;
+    try {
+      unlinkSync(path);
+      return true;
+    } catch (err) {
+      logger.error({ err, key }, "Failed to delete session");
+      return false;
+    }
   }
 
   /** List all persisted sessions (reads only the first line of each file). */

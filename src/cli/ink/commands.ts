@@ -13,6 +13,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/help", description: "show help" },
   { name: "/new", description: "start a new chat" },
   { name: "/sessions", description: "list & switch chats" },
+  { name: "/delete", description: "delete a saved chat" },
   { name: "/status", description: "model & session status" },
   { name: "/usage", description: "token usage & cost" },
   { name: "/settings", description: "provider, model & options" },

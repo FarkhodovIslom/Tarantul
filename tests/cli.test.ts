@@ -570,7 +570,7 @@ describe("SLASH_COMMANDS", () => {
       expect(c.description.length).toBeGreaterThan(0);
     }
     const names = SLASH_COMMANDS.map((c) => c.name);
-    for (const want of ["/help", "/new", "/sessions", "/settings"]) {
+    for (const want of ["/help", "/new", "/sessions", "/delete", "/settings"]) {
       expect(names).toContain(want);
     }
   });
