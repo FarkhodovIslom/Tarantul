@@ -69,11 +69,36 @@ export const AgentsConfigSchema = withAliases(
 
 export type AgentsConfig = z.infer<typeof AgentsConfigSchema>;
 
+/**
+ * One model a provider offers. `id` is required (the model identifier used in
+ * API calls, e.g. "claude-opus-4-8"); every generation parameter is optional
+ * and, when omitted, inherits the global `agents.defaults` value. A parameter
+ * set explicitly here (including an explicit `null` on the nullable ones)
+ * overrides the global default for this model — see {@link resolveActiveModel}.
+ */
+export const ModelConfigSchema = withAliases(
+  z.object({
+    id: z.string(),
+    maxTokens: z.number().int().positive().optional(),
+    contextWindowTokens: z.number().int().positive().optional(),
+    contextBlockLimit: z.number().int().positive().nullable().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxToolIterations: z.number().int().positive().optional(),
+    maxToolResultChars: z.number().int().positive().optional(),
+    providerRetryMode: z.enum(["standard", "persistent"]).optional(),
+    reasoningEffort: z.enum(["low", "medium", "high"]).nullable().optional(),
+  }),
+);
+
+export type ModelConfig = z.infer<typeof ModelConfigSchema>;
+
 export const ProviderConfigSchema = withAliases(
   z.object({
     apiKey: z.string().default(""),
     apiBase: z.string().nullable().default(null),
     extraHeaders: z.record(z.string()).nullable().default(null),
+    /** Models this provider offers, each with its own optional param overrides. */
+    models: z.array(ModelConfigSchema).default([]),
   }),
 );
 
@@ -361,4 +386,85 @@ export function getApiBase(config: Config, model?: string): string | null {
 export function getWorkspacePath(config: Config): string {
   const raw = config.agents.defaults.workspace;
   return raw.startsWith("~/") ? raw.replace("~", process.env["HOME"] ?? "") : raw;
+}
+
+// ---------------------------------------------------------------------------
+// Active-model resolution (per-model config over global defaults)
+// ---------------------------------------------------------------------------
+
+/** The generation params in effect for the active model, after applying overrides. */
+export interface EffectiveModelParams {
+  /** Active model id (as stored in `agents.defaults.model`). */
+  model: string;
+  /** Provider the active model resolves to (never "auto"). */
+  provider: string | null;
+  maxTokens: number;
+  contextWindowTokens: number;
+  contextBlockLimit: number | null;
+  temperature: number;
+  maxToolIterations: number;
+  maxToolResultChars: number;
+  providerRetryMode: "standard" | "persistent";
+  reasoningEffort: "low" | "medium" | "high" | null;
+}
+
+/** Bare model id with any leading `provider/` prefix stripped. */
+function stripModelPrefix(model: string): string {
+  return model.includes("/") ? model.split("/").slice(1).join("/") : model;
+}
+
+/** Look up a provider's configured model entry by id (exact match). */
+export function findModelConfig(
+  config: Config,
+  providerName: string,
+  modelId: string,
+): ModelConfig | null {
+  const p = (config.providers as Record<string, ProviderConfig>)[providerName];
+  if (!p) return null;
+  return p.models.find((m) => m.id === modelId) ?? null;
+}
+
+/** Return `override` unless it is absent (undefined); an explicit `null` wins. */
+function coalesce<T>(override: T | undefined, fallback: T): T {
+  return override !== undefined ? override : fallback;
+}
+
+/**
+ * Resolve the generation params for the active model: each field is the active
+ * model's per-model override when set (including an explicit `null`), otherwise
+ * the global `agents.defaults` value. The active model is
+ * `agents.defaults.provider` + `agents.defaults.model`; when the provider is
+ * `"auto"` it is derived from the model string (back-compat with pre-restructure
+ * configs), and the model entry is looked up by both its bare and prefixed id.
+ */
+export function resolveActiveModel(config: Config): EffectiveModelParams {
+  const d = config.agents.defaults;
+  const providerName =
+    d.provider !== "auto" ? d.provider : getProviderName(config, d.model) ?? null;
+
+  let entry: ModelConfig | null = null;
+  if (providerName) {
+    const bareId = stripModelPrefix(d.model);
+    entry =
+      findModelConfig(config, providerName, bareId) ??
+      findModelConfig(config, providerName, d.model);
+  }
+
+  // `ov(k)` yields the model's value for key k when the key is present (even if
+  // null), else undefined — so `coalesce` can honor an explicit null override.
+  const ov = <K extends keyof ModelConfig>(k: K): ModelConfig[K] | undefined =>
+    entry && k in entry ? entry[k] : undefined;
+
+  return {
+    model: d.model,
+    provider: providerName,
+    maxTokens: coalesce(ov("maxTokens"), d.maxTokens),
+    contextWindowTokens: coalesce(ov("contextWindowTokens"), d.contextWindowTokens),
+    contextBlockLimit: coalesce(ov("contextBlockLimit"), d.contextBlockLimit),
+    temperature: coalesce(ov("temperature"), d.temperature),
+    maxToolIterations: coalesce(ov("maxToolIterations"), d.maxToolIterations),
+    maxToolResultChars: coalesce(ov("maxToolResultChars"), d.maxToolResultChars),
+    providerRetryMode: coalesce(ov("providerRetryMode"), d.providerRetryMode),
+    reasoningEffort: coalesce(ov("reasoningEffort"), d.reasoningEffort),
+  };
 }

@@ -31,7 +31,10 @@ import { CommandRouter, registerBuiltinCommands } from "../command/index.js";
 import { getConfigPath, loadConfig, setConfigPath } from "../config/loader.js";
 import { getCliHistoryPath } from "../config/paths.js";
 import { getCronDir } from "../config/paths.js";
-import { getWorkspacePath as getWorkspacePathFromConfig } from "../config/schema.js";
+import {
+  getWorkspacePath as getWorkspacePathFromConfig,
+  resolveActiveModel,
+} from "../config/schema.js";
 import { SettingsController } from "../config/settings.js";
 import { CronService } from "../cron/service.js";
 import { createProvider } from "../providers/factory.js";
@@ -276,14 +279,17 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   tools.register(cronTool);
 
   const runner = new AgentRunner(provider);
+  const activeModel = resolveActiveModel(cfg);
   const runSpec = {
     tools,
     model: modelName,
-    maxIterations: cfg.agents.defaults.maxToolIterations,
-    maxToolResultChars: cfg.agents.defaults.maxToolResultChars,
-    temperature: cfg.agents.defaults.temperature,
-    maxTokens: cfg.agents.defaults.maxTokens,
-    contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
+    maxIterations: activeModel.maxToolIterations,
+    maxToolResultChars: activeModel.maxToolResultChars,
+    temperature: activeModel.temperature,
+    maxTokens: activeModel.maxTokens,
+    contextWindowTokens: activeModel.contextWindowTokens,
+    reasoningEffort: activeModel.reasoningEffort,
+    providerRetryMode: activeModel.providerRetryMode,
   };
 
   // Skills + system prompt
@@ -303,8 +309,8 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     provider,
     model: modelName,
     sessions,
-    contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
-    maxCompletionTokens: cfg.agents.defaults.maxTokens,
+    contextWindowTokens: activeModel.contextWindowTokens,
+    maxCompletionTokens: activeModel.maxTokens,
     buildMessages: (o) =>
       buildMessages({
         history: o.history,
@@ -554,15 +560,18 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       chatId: "direct",
     });
 
+    const active = resolveActiveModel(cfg);
     const result = await runner.run({
       initialMessages: messages,
       tools,
       model: cfg.agents.defaults.model,
-      maxIterations: cfg.agents.defaults.maxToolIterations,
-      maxToolResultChars: cfg.agents.defaults.maxToolResultChars,
-      temperature: cfg.agents.defaults.temperature,
-      maxTokens: cfg.agents.defaults.maxTokens,
-      contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
+      maxIterations: active.maxToolIterations,
+      maxToolResultChars: active.maxToolResultChars,
+      temperature: active.temperature,
+      maxTokens: active.maxTokens,
+      contextWindowTokens: active.contextWindowTokens,
+      reasoningEffort: active.reasoningEffort,
+      providerRetryMode: active.providerRetryMode,
       progressCallback: async (msg: string) => printProgress(msg),
     });
 
@@ -652,16 +661,19 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
         chatId: "direct",
       });
 
+      const active = resolveActiveModel(cfg);
       const hook = new InkHook(bridge, cfg.agents.defaults.model);
       const result = await runner.run({
         initialMessages: messages,
         tools,
         model: cfg.agents.defaults.model,
-        maxIterations: cfg.agents.defaults.maxToolIterations,
-        maxToolResultChars: cfg.agents.defaults.maxToolResultChars,
-        temperature: cfg.agents.defaults.temperature,
-        maxTokens: cfg.agents.defaults.maxTokens,
-        contextWindowTokens: cfg.agents.defaults.contextWindowTokens,
+        maxIterations: active.maxToolIterations,
+        maxToolResultChars: active.maxToolResultChars,
+        temperature: active.temperature,
+        maxTokens: active.maxTokens,
+        contextWindowTokens: active.contextWindowTokens,
+        reasoningEffort: active.reasoningEffort,
+        providerRetryMode: active.providerRetryMode,
         progressCallback: async (msg) => bridge.emitEvent({ t: "notice", text: msg, tone: "info" }),
         hook,
         signal: controller.signal,
@@ -879,6 +891,73 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     bridge.emitEvent({ t: "notice", text: `Deleted "${label}". Started a new session.`, tone: "info" });
   }
 
+  // `/model`: pick a provider, then a model configured under it, and switch to
+  // it. Two chained arrow-key pickers reusing the same Ink selector overlay as
+  // `/sessions`/`/delete`. Only providers with ≥1 configured model appear; the
+  // switch persists to config.json and rebuilds the provider/runner (via
+  // SettingsController's onProviderChange) so the next turn uses the new model
+  // and its per-model params.
+  async function cmdModelPicker(bridge: UiBridge): Promise<void> {
+    const providers = settings.configuredProviders();
+    if (providers.length === 0) {
+      bridge.emitEvent({
+        t: "notice",
+        text: "No models configured. Add them under providers.<name>.models in your config.json.",
+        tone: "info",
+      });
+      return;
+    }
+
+    const active = resolveActiveModel(cfg);
+    const activeModelId = cfg.agents.defaults.model.includes("/")
+      ? cfg.agents.defaults.model.split("/").slice(1).join("/")
+      : cfg.agents.defaults.model;
+
+    // Level 1 — provider.
+    const provOptions: SelectOption[] = providers.map((p) => ({
+      label: p.label + (p.name === active.provider ? "  (current)" : ""),
+      detail: `${p.modelCount} model${p.modelCount === 1 ? "" : "s"}`,
+    }));
+    const provIdx = await promptSelect(bridge, {
+      title: "Select provider",
+      options: provOptions,
+      escResolvesTo: null, // Esc = cancel
+      accent: "info",
+      hint: "↑↓ select · enter open · esc cancel",
+    });
+    if (provIdx === null) return;
+    const provider = providers[provIdx];
+    if (!provider) return;
+
+    // Level 2 — model.
+    const models = settings.providerModels(provider.name);
+    if (models.length === 0) {
+      bridge.emitEvent({ t: "notice", text: `No models under ${provider.label}.`, tone: "info" });
+      return;
+    }
+    const modelOptions: SelectOption[] = models.map((id) => ({
+      label:
+        id + (provider.name === active.provider && id === activeModelId ? "  (current)" : ""),
+    }));
+    const modelIdx = await promptSelect(bridge, {
+      title: `Select model — ${provider.label}`,
+      options: modelOptions,
+      escResolvesTo: null, // Esc = cancel
+      accent: "info",
+      hint: "↑↓ select · enter switch · esc cancel",
+    });
+    if (modelIdx === null) return;
+    const modelId = models[modelIdx];
+    if (!modelId) return;
+
+    const res = settings.setActiveModel(provider.name, modelId);
+    if (!res.ok) {
+      bridge.emitEvent({ t: "notice", text: res.error, tone: "error" });
+      return;
+    }
+    bridge.emitEvent({ t: "notice", text: `Model: ${provider.name}/${modelId}`, tone: "info" });
+  }
+
   // Dispatch one submitted line: CLI-only chat commands (`/new`, `/sessions`,
   // `/delete`, `/stop`) are intercepted here before the router (which would
   // otherwise send them to the model); other slash commands mirror the
@@ -901,6 +980,10 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     }
     if (cmd === "/delete") {
       await cmdDeleteSession(bridge);
+      return;
+    }
+    if (cmd === "/model") {
+      await cmdModelPicker(bridge);
       return;
     }
     if (cmd === "/stop") {

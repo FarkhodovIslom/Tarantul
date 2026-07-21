@@ -94,6 +94,27 @@ export class SettingsController {
     }));
   }
 
+  /** Providers that have ≥1 model configured — the `/model` level-1 list. */
+  configuredProviders(): { name: string; label: string; modelCount: number }[] {
+    const providers = this.cfg.providers as Record<string, ProviderConfig>;
+    const out: { name: string; label: string; modelCount: number }[] = [];
+    for (const spec of PROVIDERS) {
+      const p = providers[spec.name];
+      if (p && p.models.length > 0) {
+        out.push({ name: spec.name, label: spec.label, modelCount: p.models.length });
+      }
+    }
+    return out;
+  }
+
+  /** Model ids configured under a provider — the `/model` level-2 list. */
+  providerModels(providerName: string): string[] {
+    const spec = findByName(providerName);
+    if (!spec) return [];
+    const providers = this.cfg.providers as Record<string, ProviderConfig>;
+    return (providers[spec.name]?.models ?? []).map((m) => m.id);
+  }
+
   /** Read a dotted config path (e.g. "agents.defaults.temperature"). */
   getValue(path: string): unknown {
     const keys = path.split(".").filter(Boolean);
@@ -128,6 +149,26 @@ export class SettingsController {
       return { ok: false, error: `Unknown provider: ${trimmed}` };
     }
     this.cfg.agents.defaults.provider = trimmed;
+    this.persist();
+    this.hooks.onProviderChange?.();
+    return { ok: true };
+  }
+
+  /**
+   * Switch the active model to `modelId` under `providerName` — the `/model`
+   * command's action. Sets the provider explicit (not "auto") so resolution is
+   * unambiguous, then the model id, and always fires `onProviderChange` so the
+   * provider/runner rebuild picks up the new model + its per-model params.
+   */
+  setActiveModel(providerName: string, modelId: string): SettingsResult {
+    const spec = findByName(providerName);
+    if (!spec) return { ok: false, error: `Unknown provider: ${providerName}` };
+    const id = modelId.trim();
+    if (!id) return { ok: false, error: "Model id cannot be empty." };
+
+    const d = this.cfg.agents.defaults;
+    d.provider = spec.name;
+    d.model = id;
     this.persist();
     this.hooks.onProviderChange?.();
     return { ok: true };
