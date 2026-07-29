@@ -1,7 +1,6 @@
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { type Config, ConfigSchema, type ProviderConfig, getProviderName } from "./schema.js";
 
 // ---------------------------------------------------------------------------

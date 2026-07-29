@@ -1,4 +1,3 @@
-
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -22,7 +21,7 @@ function withAliases<T extends z.ZodTypeAny>(schema: T): T {
       out[camel(k)] = v;
     }
     return out;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }, schema) as unknown as T;
 }
 
@@ -139,7 +138,11 @@ export type ProvidersConfig = z.infer<typeof ProvidersConfigSchema>;
 export const HeartbeatConfigSchema = withAliases(
   z.object({
     enabled: z.boolean().default(true),
-    intervalS: z.number().int().positive().default(30 * 60),
+    intervalS: z
+      .number()
+      .int()
+      .positive()
+      .default(30 * 60),
     keepRecentMessages: z.number().int().positive().default(8),
   }),
 );
@@ -298,7 +301,9 @@ export function matchProvider(
     const spec = findByName(forced);
     if (spec) {
       const p = (config.providers as Record<string, ProviderConfig>)[spec.name] ?? null;
-      return p ? { providerConfig: p, providerName: spec.name } : { providerConfig: null, providerName: null };
+      return p
+        ? { providerConfig: p, providerName: spec.name }
+        : { providerConfig: null, providerName: null };
     }
     return { providerConfig: null, providerName: null };
   }
@@ -310,7 +315,12 @@ export function matchProvider(
 
   const kwMatches = (kw: string) => {
     kw = kw.toLowerCase();
-    return kw.includes(modelStr) || kw === modelStr || modelStr.includes(kw) || modelNormalized.includes(kw.replace(/-/g, "_"));
+    return (
+      kw.includes(modelStr) ||
+      kw === modelStr ||
+      modelStr.includes(kw) ||
+      modelNormalized.includes(kw.replace(/-/g, "_"))
+    );
   };
 
   const providers = config.providers as Record<string, ProviderConfig>;
@@ -340,7 +350,7 @@ export function matchProvider(
   for (const spec of PROVIDERS) {
     if (!spec.isLocal) continue;
     const p = providers[spec.name];
-    if (!(p?.apiBase)) continue;
+    if (!p?.apiBase) continue;
     if (spec.detectByBaseKeyword && p.apiBase.includes(spec.detectByBaseKeyword)) {
       return { providerConfig: p, providerName: spec.name };
     }
@@ -440,7 +450,7 @@ function coalesce<T>(override: T | undefined, fallback: T): T {
 export function resolveActiveModel(config: Config): EffectiveModelParams {
   const d = config.agents.defaults;
   const providerName =
-    d.provider !== "auto" ? d.provider : getProviderName(config, d.model) ?? null;
+    d.provider !== "auto" ? d.provider : (getProviderName(config, d.model) ?? null);
 
   let entry: ModelConfig | null = null;
   if (providerName) {

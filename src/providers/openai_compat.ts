@@ -20,8 +20,7 @@ function shortToolId(): string {
 
 function normalizeToolCallId(id: unknown): unknown {
   if (typeof id !== "string") return id;
-  if (id.length === 9 && /^[a-zA-Z0-9]+$/.test(id)) return id;
-  return createHash("sha1").update(id).digest("hex").slice(0, 9);
+  return id;
 }
 
 function usesOpenrouterAttribution(spec: ProviderSpec | null, apiBase: string | null): boolean {
@@ -142,8 +141,9 @@ function parseToolCalls(rawToolCalls: Record<string, unknown>[]): ToolCallReques
     if (typeof args === "string") {
       try { args = JSON.parse(args); } catch { args = {}; }
     }
+    const rawId = typeof tc["id"] === "string" && tc["id"] ? String(tc["id"]) : shortToolId();
     return {
-      id: shortToolId(),
+      id: rawId,
       name: String(fn["name"] ?? ""),
       arguments: typeof args === "object" && args !== null ? args as Record<string, unknown> : {},
     };
@@ -353,7 +353,7 @@ export class OpenAICompatProvider extends LLMProvider {
     // caller-triggered abort can still return whatever streamed before it
     // fired, instead of discarding the partial reply in the catch below.
     let content = "";
-    const toolCallsMap = new Map<number, { name: string; args: string }>();
+    const toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
     let finishReason = "stop";
     let usage: Record<string, number> = {};
     let reasoningContent = "";
@@ -366,12 +366,6 @@ export class OpenAICompatProvider extends LLMProvider {
       ) as any;
 
       // Accumulate streaming response.
-      // Tool-call ids are minted fresh below (shortToolId()), same as the
-      // non-streaming parseToolCalls() path — upstream ids are intentionally
-      // not preserved, since provider id formats/lengths vary too widely
-      // (UUIDs, empty strings, etc.) across the 25 OpenAI-compatible specs
-      // this provider supports. So there's nothing to accumulate per-index
-      // here beyond name/args.
       for await (const chunk of stream) {
         const choices = (chunk["choices"] as Record<string, unknown>[]) ?? [];
         for (const choice of choices) {
@@ -390,9 +384,10 @@ export class OpenAICompatProvider extends LLMProvider {
               const idx = (tc["index"] as number) ?? 0;
               const fn = (tc["function"] as Record<string, unknown>) ?? {};
               if (!toolCallsMap.has(idx)) {
-                toolCallsMap.set(idx, { name: "", args: "" });
+                toolCallsMap.set(idx, { id: "", name: "", args: "" });
               }
               const entry = toolCallsMap.get(idx)!;
+              if (tc["id"]) entry.id += String(tc["id"]);
               if (fn["name"]) entry.name += String(fn["name"]);
               if (fn["arguments"]) entry.args += String(fn["arguments"]);
             }
@@ -422,7 +417,7 @@ export class OpenAICompatProvider extends LLMProvider {
         let args: unknown;
         try { args = JSON.parse(entry.args); } catch { args = {}; }
         toolCalls.push({
-          id: shortToolId(),
+          id: entry.id || shortToolId(),
           name: entry.name,
           arguments: typeof args === "object" && args !== null ? args as Record<string, unknown> : {},
         });

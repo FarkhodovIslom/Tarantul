@@ -322,7 +322,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
       }),
     getToolDefinitions: () => tools.getDefinitions(),
     // Immediately refresh the search index after consolidation writes notes/logs.
-    ...(memoryService ? { onConsolidated: (key: string) => memoryService!.reindex(key) } : {}),
+    ...(memoryService ? { onConsolidated: (key: string) => memoryService?.reindex(key) } : {}),
   });
 
   // Gateway loop: bus (inbound) → AgentRunner → bus (outbound).
@@ -348,7 +348,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
       modelName,
       apiKey,
       getSystemPrompt,
-      wrapTurn: memoryService ? (key, fn) => memoryService!.runWithSession(key, fn) : null,
+      wrapTurn: memoryService ? (key, fn) => memoryService?.runWithSession(key, fn) : null,
     },
     runner,
     sessions,
@@ -394,7 +394,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     server.stop();
     cron.stop();
     await channelManager.stopAll();
-    await loop!.stop();
+    await loop?.stop();
     await closeAllMcpServers(mcpConnections);
     resolveFn();
   };
@@ -682,7 +682,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       // A provider that returns content without ever streaming deltas would
       // otherwise vanish silently — surface it as a single completed block.
       if (result.stopReason === "error" || result.stopReason === "tool_error") {
-        bridge.emitEvent({ t: "assistant-delta", text: "\n\n" + (result.finalContent ?? "") });
+        bridge.emitEvent({ t: "assistant-delta", text: `\n\n${result.finalContent ?? ""}` });
         bridge.emitEvent({ t: "assistant-end", model: cfg.agents.defaults.model });
       } else if (!hook.didStream && result.finalContent) {
         bridge.emitEvent({ t: "assistant-delta", text: result.finalContent });
@@ -888,7 +888,11 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
     currentSessionId = id;
     if (!explicitSession) writeActivePointer(wsPath, id);
     bridge.emitEvent({ t: "clear" });
-    bridge.emitEvent({ t: "notice", text: `Deleted "${label}". Started a new session.`, tone: "info" });
+    bridge.emitEvent({
+      t: "notice",
+      text: `Deleted "${label}". Started a new session.`,
+      tone: "info",
+    });
   }
 
   // `/model`: pick a provider, then a model configured under it, and switch to
@@ -936,8 +940,7 @@ async function cmdAgent(args: ParsedArgs): Promise<void> {
       return;
     }
     const modelOptions: SelectOption[] = models.map((id) => ({
-      label:
-        id + (provider.name === active.provider && id === activeModelId ? "  (current)" : ""),
+      label: id + (provider.name === active.provider && id === activeModelId ? "  (current)" : ""),
     }));
     const modelIdx = await promptSelect(bridge, {
       title: `Select model — ${provider.label}`,

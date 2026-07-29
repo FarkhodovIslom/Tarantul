@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadConfig } from "../src/config/loader";
 import {
   ConfigSchema,
-  matchProvider,
-  getApiKey,
-  resolveActiveModel,
   findModelConfig,
+  getApiKey,
+  matchProvider,
+  resolveActiveModel,
 } from "../src/config/schema";
-import { loadConfig } from "../src/config/loader";
 import { SettingsController } from "../src/config/settings";
 
 describe("ConfigSchema", () => {
@@ -105,10 +105,10 @@ describe("ModelConfigSchema + provider models", () => {
       },
     });
     expect(cfg.providers.anthropic.models.length).toBe(2);
-    expect(cfg.providers.anthropic.models[0]!.id).toBe("claude-opus-4-8");
-    expect(cfg.providers.anthropic.models[0]!.temperature).toBe(0.3);
+    expect(cfg.providers.anthropic.models[0]?.id).toBe("claude-opus-4-8");
+    expect(cfg.providers.anthropic.models[0]?.temperature).toBe(0.3);
     // An omitted param is genuinely absent (so it can inherit the global default).
-    expect("temperature" in cfg.providers.anthropic.models[1]!).toBe(false);
+    expect(Object.hasOwn(cfg.providers.anthropic.models[1] ?? {}, "temperature")).toBe(false);
   });
 
   it("defaults models to an empty array", () => {
@@ -125,15 +125,17 @@ describe("ModelConfigSchema + provider models", () => {
         },
       },
     });
-    expect(cfg.providers.openai.models[0]!.maxTokens).toBe(1000);
-    expect(cfg.providers.openai.models[0]!.contextWindowTokens).toBe(20000);
+    expect(cfg.providers.openai.models[0]?.maxTokens).toBe(1000);
+    expect(cfg.providers.openai.models[0]?.contextWindowTokens).toBe(20000);
   });
 });
 
 describe("findModelConfig", () => {
   it("finds a model by id under a provider, else null", () => {
     const cfg = ConfigSchema.parse({
-      providers: { anthropic: { apiKey: "k", models: [{ id: "claude-opus-4-8", temperature: 0.5 }] } },
+      providers: {
+        anthropic: { apiKey: "k", models: [{ id: "claude-opus-4-8", temperature: 0.5 }] },
+      },
     });
     expect(findModelConfig(cfg, "anthropic", "claude-opus-4-8")?.temperature).toBe(0.5);
     expect(findModelConfig(cfg, "anthropic", "nope")).toBeNull();
@@ -154,7 +156,10 @@ describe("resolveActiveModel", () => {
         },
       },
       providers: {
-        anthropic: { apiKey: "k", models: [{ id: "claude-opus-4-8", temperature: 0.9, maxTokens: 4096 }] },
+        anthropic: {
+          apiKey: "k",
+          models: [{ id: "claude-opus-4-8", temperature: 0.9, maxTokens: 4096 }],
+        },
       },
     });
     const r = resolveActiveModel(cfg);
@@ -224,7 +229,7 @@ describe("SettingsController — model helpers", () => {
     const names = sc.configuredProviders().map((p) => p.name);
     expect(names).toContain("anthropic");
     expect(names).not.toContain("openai");
-    expect(sc.configuredProviders().find((p) => p.name === "anthropic")!.modelCount).toBe(2);
+    expect(sc.configuredProviders().find((p) => p.name === "anthropic")?.modelCount).toBe(2);
   });
 
   it("providerModels returns the model ids, or [] for an unknown provider", () => {

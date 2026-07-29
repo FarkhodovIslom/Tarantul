@@ -132,7 +132,15 @@ async function sleep(seconds: number): Promise<void> {
 // Message sanitization helpers (shared across providers)
 // ---------------------------------------------------------------------------
 
-const ALLOWED_MSG_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
+const ALLOWED_MSG_KEYS = new Set([
+  "role",
+  "content",
+  "tool_calls",
+  "tool_call_id",
+  "name",
+  "reasoning_content",
+  "reasoning"
+]);
 
 export function sanitizeEmptyContent(
   messages: Record<string, unknown>[],
@@ -210,8 +218,12 @@ export function sanitizeRequestMessages(
       if (allowedKeys.has(k)) clean[k] = v;
     }
     if (clean["role"] === "assistant") {
-      const c = clean["content"];
-      if (c === null || c === "" || !("content" in clean)) {
+      const tcs = clean["tool_calls"];
+      const hasTools = Array.isArray(tcs) && tcs.length > 0;
+      if (clean["content"] === "" || clean["content"] === undefined) {
+        clean["content"] = null;
+      }
+      if (!hasTools && clean["content"] === null) {
         delete clean["content"];
       }
     }

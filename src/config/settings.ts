@@ -1,4 +1,3 @@
-
 /**
  * Runtime settings mutation layer behind the `/settings` command. Wraps a
  * live `Config` reference: every setter validates, mutates the object
@@ -8,9 +7,9 @@
  * so it can rebuild the `LLMProvider` + `AgentRunner`.
  */
 
-import { type Config, ConfigSchema, type ProviderConfig, getProviderName } from "./schema.js";
-import { saveConfig } from "./loader.js";
 import { PROVIDERS, findByName } from "../providers/registry.js";
+import { saveConfig } from "./loader.js";
+import { type Config, ConfigSchema, type ProviderConfig, getProviderName } from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -253,8 +252,8 @@ export class SettingsController {
 
     const clone = structuredClone(this.cfg) as unknown as Record<string, unknown>;
     const cloneParent = walkToParent(clone, keys);
-    const leafKey = keys[keys.length - 1]!;
-    if (!cloneParent || !(leafKey in cloneParent)) {
+    const leafKey = keys.at(-1);
+    if (!cloneParent || !leafKey || !(leafKey in cloneParent)) {
       return { ok: false, error: `Unknown config path: ${path}` };
     }
     cloneParent[leafKey] = coerceValue(rawValue, cloneParent[leafKey]);
@@ -264,8 +263,11 @@ export class SettingsController {
       return { ok: false, error: parsed.error.issues.map((i) => i.message).join("; ") };
     }
 
-    const liveParent = walkToParent(this.cfg as unknown as Record<string, unknown>, keys)!;
-    const validatedParent = walkToParent(parsed.data as unknown as Record<string, unknown>, keys)!;
+    const liveParent = walkToParent(this.cfg as unknown as Record<string, unknown>, keys);
+    const validatedParent = walkToParent(parsed.data as unknown as Record<string, unknown>, keys);
+    if (!liveParent || !validatedParent) {
+      return { ok: false, error: `Cannot walk config path: ${path}` };
+    }
     liveParent[leafKey] = validatedParent[leafKey];
 
     this.persist();
@@ -300,7 +302,9 @@ function walkToParent(
 ): Record<string, unknown> | null {
   let cursor: Record<string, unknown> = root;
   for (let i = 0; i < keys.length - 1; i++) {
-    const next = cursor[keys[i]!];
+    const key = keys[i];
+    if (key === undefined) return null;
+    const next = cursor[key];
     if (typeof next !== "object" || next === null) return null;
     cursor = next as Record<string, unknown>;
   }
