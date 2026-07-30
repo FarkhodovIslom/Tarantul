@@ -103,23 +103,12 @@ export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
   switch (item.kind) {
     case "user":
       return (
-        <Box
-          flexDirection="column"
-          width="100%"
-          borderStyle="single"
-          borderColor={tiffany.selection}
-          borderTop={true}
-          borderRight={false}
-          borderLeft={false}
-          borderBottom={false}
-          paddingY={1}
-          paddingX={2}
-          marginTop={1}
-        >
-          <Box gap={1}>
-            <Text color={tiffany.primary} bold>{"❯ You"}</Text>
+        <Box flexDirection="column" width="100%" paddingX={2} marginTop={1} marginBottom={1}>
+          <Box marginBottom={1}>
+            <Text color={tiffany.selection}>{"─".repeat(48)}</Text>
           </Box>
-          <Box marginTop={0}>
+          <Box gap={1}>
+            <Text color={tiffany.primary} bold>{"⬩➤ "}</Text>
             <Text color={tiffany.fg}>{item.text}</Text>
           </Box>
         </Box>
@@ -241,7 +230,7 @@ export function InputBar({
         paddingY={1}
         width="100%"
       >
-        <Text color={disabled ? tiffany.comment : tiffany.primary}>{"> "}</Text>
+        <Text color={disabled ? tiffany.comment : tiffany.primary}>{"⬩➤ "}</Text>
         <Text color={tiffany.fg}>{before}</Text>
         <Text inverse>{at}</Text>
         <Text color={tiffany.fg}>{after}</Text>
