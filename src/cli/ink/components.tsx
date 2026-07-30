@@ -190,7 +190,11 @@ export function LiveRegion({
           <Text color={tiffany.fg}>{markdownToAnsi(assistant)}</Text>
         </WindowBlock>
       ) : null}
-      {busy ? <Spinner label={busyLabel ?? (assistant ? "Writing…" : "Thinking…")} /> : null}
+      {busy ? (
+        <Spinner
+          label={busyLabel ?? (assistant ? "Writing…" : tools.length > 0 ? "Working…" : "Thinking…")}
+        />
+      ) : null}
     </Box>
   );
 }
