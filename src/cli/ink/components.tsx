@@ -3,66 +3,80 @@ import type React from "react";
 import { useEffect, useState } from "react";
 import { markdownToAnsi, toolCallLabel } from "../render.js";
 import { SLASH_COMMANDS, type SlashCommand } from "./commands.js";
-import { dracula } from "./theme.js";
+import { tiffany } from "./theme.js";
 import type { RunningTool, SelectorSpec, TranscriptItem } from "./types.js";
 
-/** Two-tone block logotype (matches the legacy renderer). */
-const BLOCK_LOGO: [string, string] = [
-  "▀█▀ ▄▀▄ █▀▄ ▄▀▄ █▀█ ▀█▀ █ █ █  ",
-  " █  █▀█ █▀▄ █▀█ █ █  █  █▄█ █▄▄",
+/**
+ * OpenCode-style spatial layout powered by Tiffany theme tokens.
+ * High negative space, crisp hierarchy, clean text markers.
+ */
+
+const BLOCK_LOGO: readonly string[] = [
+  `█████████████████████████████████████████████████`,
+  `█               T A R A N T U L                 █`,
+  `█████████████████████████████████████████████████`,
 ];
-const LOGO_SPLIT = 20;
 
 export function Banner({ version, model }: { version: string; model: string }): React.ReactElement {
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      {BLOCK_LOGO.map((line) => (
-        <Text key={line}>
-          <Text color={dracula.comment}>{line.slice(0, LOGO_SPLIT)}</Text>
-          <Text color={dracula.purple}>{line.slice(LOGO_SPLIT)}</Text>
+    <Box flexDirection="column" alignItems="center" paddingY={2} width="100%">
+      {BLOCK_LOGO.map((line, i) => (
+        <Text key={`logo-line-${i}`} color={tiffany.primary}>
+          {line}
         </Text>
       ))}
-      <Text color={dracula.comment}>{`🕷️ v${version} · ${model}`}</Text>
-      <Box marginTop={1} flexDirection="column">
+      <Box marginTop={1}>
+        <Text bold color={tiffany.secondary}>{`v${version}`}</Text>
+        <Text color={tiffany.comment}>{` · ${model}`}</Text>
+      </Box>
+
+      <Box marginTop={2} flexDirection="column" width={48}>
         {SLASH_COMMANDS.map((c) => (
-          <Text key={c.name}>
-            <Text color={dracula.purple}>{c.name.padEnd(12)}</Text>
-            <Text color={dracula.comment}>{c.description}</Text>
-          </Text>
+          <Box key={c.name} justifyContent="space-between" width="100%">
+            <Text color={tiffany.primary}>{c.name}</Text>
+            <Text color={tiffany.comment}>{c.description}</Text>
+          </Box>
         ))}
-        <Text key="exit">
-          <Text color={dracula.purple}>{"exit".padEnd(12)}</Text>
-          <Text color={dracula.comment}>quit</Text>
-        </Text>
+        <Box justifyContent="space-between" width="100%">
+          <Text color={tiffany.primary}>exit</Text>
+          <Text color={tiffany.comment}>quit application</Text>
+        </Box>
       </Box>
     </Box>
   );
 }
 
-/** Left-accent-bordered block used for user + assistant messages. */
-function BorderedBlock({
-  color,
+/**
+ * Top-bordered block for messages/assistant output.
+ * Clean tiling window manager layout with Tiffany accents.
+ */
+function WindowBlock({
   children,
+  header,
 }: {
-  color: string;
   children: React.ReactNode;
+  header?: React.ReactNode;
 }): React.ReactElement {
   return (
     <Box
+      flexDirection="column"
+      width="100%"
       borderStyle="single"
-      borderColor={color}
-      borderTop={false}
+      borderColor={tiffany.selection}
       borderRight={false}
+      borderLeft={false}
       borderBottom={false}
-      paddingLeft={1}
+      paddingY={1}
+      paddingX={2}
       marginBottom={1}
     >
+      {header ? <Box marginBottom={1}>{header}</Box> : null}
       <Box flexDirection="column">{children}</Box>
     </Box>
   );
 }
 
-/** A completed tool line: colored ⏺ bullet + label, with a dim ⎿ result. */
+/** A completed tool line with simple ASCII status markers. */
 export function ToolLine({
   label,
   ok,
@@ -75,12 +89,12 @@ export function ToolLine({
   const summary = (detail.split("\n")[0] ?? "").trim();
   const capped = summary.length > 100 ? `${summary.slice(0, 99)}…` : summary;
   return (
-    <Box flexDirection="column" marginBottom={1}>
+    <Box flexDirection="column" paddingX={2} marginBottom={1}>
       <Text>
-        <Text color={ok ? dracula.green : dracula.red}>⏺ </Text>
-        <Text bold>{label}</Text>
+        <Text color={ok ? tiffany.green : tiffany.red}>{ok ? "[+] " : "[-] "}</Text>
+        <Text bold color={tiffany.fg}>{label}</Text>
       </Text>
-      {capped ? <Text color={dracula.comment}>{`  ⎿ ${capped}`}</Text> : null}
+      {capped ? <Text color={tiffany.comment}>{`  └─ ${capped}`}</Text> : null}
     </Box>
   );
 }
@@ -89,79 +103,68 @@ export function ToolLine({
 export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
   switch (item.kind) {
     case "user":
-      // Compact, unbordered echo — deliberately structured differently from
-      // the assistant's bordered block (not just a different border color)
-      // so the two stay distinguishable even in low-color terminals.
       return (
-        <Box marginBottom={1}>
-          <Text color={dracula.pink}>{"> "}</Text>
-          <Text color={dracula.pink}>{item.text}</Text>
+        <Box flexDirection="column" width="100%" paddingX={2} marginY={1}>
+          <Box
+            backgroundColor={tiffany.selection}
+            paddingX={2}
+            paddingY={1}
+            width="100%"
+          >
+            <Text color={tiffany.primary} bold>{"❯ You: "}</Text>
+            <Text color={tiffany.fg}>{item.text}</Text>
+          </Box>
         </Box>
       );
     case "assistant":
-      // Footer only when a model is known — mid-turn flushes and replayed
-      // history carry an empty model and must not render a bare " ()" line.
       return (
-        <BorderedBlock color={dracula.purple}>
-          <Text>
-            <Text color={dracula.purple}>{"⏺ "}</Text>
-            {markdownToAnsi(item.text)}
-          </Text>
-          {item.model ? (
-            <Text color={dracula.comment}>{`${item.model} (${item.time})`}</Text>
-          ) : null}
-        </BorderedBlock>
+        <WindowBlock
+          header={
+            <Box gap={1}>
+              <Text color={tiffany.secondary} bold>{"✦ Assistant"}</Text>
+              {item.model ? (
+                <Text color={tiffany.comment}>{`(${item.model} · ${item.time})`}</Text>
+              ) : null}
+            </Box>
+          }
+        >
+          <Text color={tiffany.fg}>{markdownToAnsi(item.text)}</Text>
+        </WindowBlock>
       );
     case "tool":
       return <ToolLine label={item.label} ok={item.ok} detail={item.detail} />;
     case "notice":
       return (
-        <Box marginBottom={1}>
-          <Text color={item.tone === "error" ? dracula.red : dracula.comment}>{item.text}</Text>
+        <Box paddingX={2} marginBottom={1}>
+          <Text color={item.tone === "error" ? tiffany.red : tiffany.comment}>{`! ${item.text}`}</Text>
         </Box>
       );
   }
 }
 
-/**
- * Spinner glyph packs. One is picked at random per process start (not per
- * spinner instance, so it stays consistent for the whole run) rather than
- * hard-coding a single fixed set — the old `✢ ✳ ✻ ✽` pulse read as a
- * straight Claude Code lookalike.
- */
-const SPINNER_PACKS: readonly (readonly string[])[] = [
-  ["⭑", "✶", "✷", "✸", "✹"],
-  ["☆", "★", "✮", "★", "☆"],
-  ["𒅒", "𒈔", "𒅒", "𒇫", "𒄆"],
-  ["𓆝", "𓆟", "𓆞", "𓆝", "𓆟"],
-  ["🂡", "🂱", "🃁", "🃑", "🃟"],
-  ["◐", "◓", "◑", "◒", "◐"],
-];
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-const SPINNER_FRAMES: readonly string[] =
-  SPINNER_PACKS[Math.floor(Math.random() * SPINNER_PACKS.length)] ?? SPINNER_PACKS[0]!;
-
-/** Pulsing-asterisk spinner with an elapsed-seconds suffix. */
 export function Spinner({ label }: { label: string }): React.ReactElement {
   const [frame, setFrame] = useState(0);
   const [start] = useState(() => Date.now());
   const [secs, setSecs] = useState(0);
+
   useEffect(() => {
     const t = setInterval(() => {
       setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
       setSecs(Math.floor((Date.now() - start) / 1000));
-    }, 120);
+    }, 80);
     return () => clearInterval(t);
   }, [start]);
+
   return (
-    <Text>
-      <Text color={dracula.purple}>{SPINNER_FRAMES[frame]}</Text>
-      <Text color={dracula.comment}>{` ${label} (${secs}s)`}</Text>
-    </Text>
+    <Box paddingX={2} paddingY={1} gap={1}>
+      <Text color={tiffany.secondary} bold>{SPINNER_FRAMES[frame]}</Text>
+      <Text color={tiffany.comment}>{`${label} (${secs}s)`}</Text>
+    </Box>
   );
 }
 
-/** The in-progress region: running tools, streaming text, and a spinner. */
 export function LiveRegion({
   assistant,
   tools,
@@ -171,25 +174,21 @@ export function LiveRegion({
   assistant: string;
   tools: RunningTool[];
   busy: boolean;
-  /** Override for the spinner label (e.g. "Summarizing session…"); null = default. */
   busyLabel: string | null;
 }): React.ReactElement | null {
   if (!busy && !assistant && tools.length === 0) return null;
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width="100%">
       {tools.map((t) => (
-        <Text key={t.id}>
-          <Text color={dracula.purple}>⏺ </Text>
-          <Text bold>{t.label}</Text>
-        </Text>
+        <Box key={t.id} paddingX={2} gap={1}>
+          <Text color={tiffany.secondary}>⚙️</Text>
+          <Text bold color={tiffany.fg}>{t.label}</Text>
+        </Box>
       ))}
       {assistant ? (
-        <BorderedBlock color={dracula.purple}>
-          <Text>
-            <Text color={dracula.purple}>{"⏺ "}</Text>
-            {markdownToAnsi(assistant)}
-          </Text>
-        </BorderedBlock>
+        <WindowBlock header={<Text color={tiffany.secondary} bold>{"✦ Assistant"}</Text>}>
+          <Text color={tiffany.fg}>{markdownToAnsi(assistant)}</Text>
+        </WindowBlock>
       ) : null}
       {busy ? <Spinner label={busyLabel ?? (assistant ? "Writing…" : "Thinking…")} /> : null}
     </Box>
@@ -197,10 +196,8 @@ export function LiveRegion({
 }
 
 /**
- * Bottom-docked tinted input bar + hint row + status row.
- * `disabled` (true while a turn is busy) only dims the prompt color and swaps
- * the hint text — typing still works while busy (so "/stop" can be entered),
- * so the cursor block always renders.
+ * Native application style input container with Tiffany background block,
+ * breathable vertical padding, and discrete status rows.
  */
 export function InputBar({
   value,
@@ -220,33 +217,34 @@ export function InputBar({
   const before = value.slice(0, cursor);
   const at = value.slice(cursor, cursor + 1) || " ";
   const after = value.slice(cursor + 1);
+
   return (
-    <Box flexDirection="column">
-      <Box backgroundColor={dracula.selection} paddingX={1}>
-        <Text color={disabled ? dracula.comment : dracula.pink}>{"> "}</Text>
-        <Text color={dracula.fg}>{before}</Text>
+    <Box flexDirection="column" width="100%" paddingX={2} marginTop={1} marginBottom={1}>
+      <Box
+        backgroundColor={disabled ? tiffany.bg : tiffany.selection}
+        paddingX={2}
+        paddingY={1}
+        width="100%"
+      >
+        <Text color={disabled ? tiffany.comment : tiffany.primary}>{"> "}</Text>
+        <Text color={tiffany.fg}>{before}</Text>
         <Text inverse>{at}</Text>
-        <Text color={dracula.fg}>{after}</Text>
+        <Text color={tiffany.fg}>{after}</Text>
       </Box>
-      <Box justifyContent="space-between" paddingX={1}>
-        <Text color={dracula.comment}>
-          {disabled ? "ctrl+c or /stop to cancel" : "enter send · /help commands · exit quit"}
+      <Box justifyContent="space-between" width="100%" marginTop={1}>
+        <Text color={tiffany.comment}>
+          {disabled ? "ctrl+c to cancel" : "enter send · /help commands · exit quit"}
         </Text>
-        <Text color={dracula.comment}>{hintRight}</Text>
+        <Text color={tiffany.comment}>{hintRight}</Text>
       </Box>
-      <Box justifyContent="space-between" paddingX={1}>
-        <Text color={dracula.comment}>{statusLeft}</Text>
-        <Text color={dracula.comment}>{statusRight}</Text>
+      <Box justifyContent="space-between" width="100%">
+        <Text color={tiffany.comment}>{statusLeft}</Text>
+        <Text color={tiffany.comment}>{statusRight}</Text>
       </Box>
     </Box>
   );
 }
 
-/**
- * Generic arrow-key selector shown in place of the input bar — reused by the
- * permission prompt, the summarize-on-leave confirm, and the /sessions picker.
- * Purely presentational; selection state lives in the parent (App).
- */
 export function SelectPrompt({
   spec,
   selectedIndex,
@@ -254,36 +252,41 @@ export function SelectPrompt({
   spec: SelectorSpec;
   selectedIndex: number;
 }): React.ReactElement {
-  const accent = spec.accent === "warn" ? dracula.orange : dracula.purple;
+  const accent = spec.accent === "warn" ? tiffany.orange : tiffany.primary;
   const hint = spec.hint ?? "↑↓ select · enter confirm · esc cancel";
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={accent} paddingX={1}>
-      <Text color={accent}>{spec.title}</Text>
+    <Box
+      flexDirection="column"
+      width="100%"
+      borderStyle="single"
+      borderColor={accent}
+      paddingX={2}
+      paddingY={1}
+      marginBottom={1}
+    >
+      <Text color={accent} bold>{spec.title}</Text>
       {(spec.body ?? []).map((line) => (
-        <Text key={line} color={dracula.comment}>
-          {line}
-        </Text>
+        <Text key={line} color={tiffany.comment}>{line}</Text>
       ))}
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
         {spec.options.map((opt, i) => {
           const selected = i === selectedIndex;
           return (
             <Text key={`${opt.label}-${i}`}>
-              <Text color={dracula.green}>{selected ? "• " : "  "}</Text>
-              <Text color={selected ? dracula.fg : dracula.comment} bold={selected}>
+              <Text color={tiffany.green}>{selected ? "[x] " : "[ ] "}</Text>
+              <Text color={selected ? tiffany.fg : tiffany.comment} bold={selected}>
                 {opt.label}
               </Text>
-              {opt.detail ? <Text color={dracula.comment}>{`  ${opt.detail}`}</Text> : null}
+              {opt.detail ? <Text color={tiffany.comment}>{`  ${opt.detail}`}</Text> : null}
             </Text>
           );
         })}
       </Box>
-      <Text color={dracula.comment}>{hint}</Text>
+      <Text color={tiffany.comment}>{hint}</Text>
     </Box>
   );
 }
 
-/** Typing-time slash-command autocomplete list, shown above the input bar. */
 export function SuggestionList({
   items,
   selectedIndex,
@@ -292,23 +295,23 @@ export function SuggestionList({
   selectedIndex: number;
 }): React.ReactElement {
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" paddingX={2} marginBottom={1}>
       {items.map((c, i) => {
         const selected = i === selectedIndex;
         return (
-          <Text key={c.name}>
-            <Text color={dracula.green}>{selected ? "• " : "  "}</Text>
-            <Text color={selected ? dracula.fg : dracula.purple} bold={selected}>
-              {c.name.padEnd(12)}
+          <Box key={c.name} width={48} justifyContent="space-between">
+            <Text color={selected ? tiffany.green : tiffany.comment}>
+              {selected ? `> ${c.name}` : `  ${c.name}`}
             </Text>
-            <Text color={dracula.comment}>{c.description}</Text>
-          </Text>
+            <Text color={tiffany.comment}>{c.description}</Text>
+          </Box>
         );
       })}
-      <Text color={dracula.comment}>↑↓ select · tab complete · enter run · esc dismiss</Text>
+      <Box marginTop={1}>
+        <Text color={tiffany.comment}>↑↓ select · tab complete · enter run · esc dismiss</Text>
+      </Box>
     </Box>
   );
 }
 
-/** Re-export so callers building tool labels don't reach past this module. */
 export { toolCallLabel };

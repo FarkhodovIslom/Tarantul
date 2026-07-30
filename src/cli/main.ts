@@ -58,8 +58,8 @@ import { runOnboarding } from "./onboarding.js";
 import { ansi, printProgress, printResponse, styled } from "./render.js";
 import { CliHistory, readStdin } from "./repl.js";
 import { runSettingsMenu } from "./settings-menu.js";
+import { VERSION } from "../version.js";
 
-const VERSION = "0.1.0";
 const LOGO = "🕷️";
 
 // ---------------------------------------------------------------------------

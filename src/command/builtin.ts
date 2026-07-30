@@ -3,8 +3,7 @@ import type { OutboundMessage } from "../bus/events.js";
 import type { CommandContext } from "./router.js";
 import { CommandRouter } from "./router.js";
 import { getSessionUsage, formatUsageSummary } from "../agent/usage.js";
-
-const VERSION = "0.1.0";
+import { VERSION } from "../version.js";
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -96,7 +95,7 @@ async function cmdStatus(ctx: CommandContext): Promise<OutboundMessage> {
   if (lastUsage["prompt_tokens"]) {
     lines.push(
       `Last call: ${lastUsage["prompt_tokens"]} prompt / ` +
-        `${lastUsage["completion_tokens"] ?? 0} completion tokens`,
+      `${lastUsage["completion_tokens"] ?? 0} completion tokens`,
     );
     if (lastUsage["cached_tokens"]) {
       lines.push(`  Cached: ${lastUsage["cached_tokens"]} tokens`);

@@ -19,9 +19,10 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Tool } from "./base.js";
 import { logger } from "../../utils/logger.js";
+import { VERSION } from "../../version.js";
 import type { MCPServerConfig } from "../../config/schema.js";
 
-const CLIENT_VERSION = "0.1.0";
+const CLIENT_VERSION = VERSION;
 /** Floor for the connect handshake timeout — some stdio servers (e.g. npx-installed) are slow to cold-start. */
 const MIN_CONNECT_TIMEOUT_SEC = 15;
 

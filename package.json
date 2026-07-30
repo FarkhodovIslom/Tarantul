@@ -1,6 +1,6 @@
 {
   "name": "tarantul",
-  "version": "0.1.4",
+  "version": "0.0.1",
   "description": "A lightweight personal AI assistant framework with a real long-term memory: a hybrid-searched, wikilink-connected knowledge graph the agent builds itself.",
   "type": "module",
   "license": "MIT",

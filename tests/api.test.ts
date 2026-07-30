@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ApiServer } from "../src/api/server.js";
+import { VERSION } from "../src/version.js";
 import { SessionManager } from "../src/session/manager.js";
 import { ToolRegistry } from "../src/agent/tools/registry.js";
 import type { ApiServerOpts } from "../src/api/types.js";
@@ -553,7 +554,7 @@ describe("Status, Usage, and Help endpoints", () => {
     const res = await fetch(`${baseUrl}/v1/status`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { version: string; model: string };
-    expect(body.version).toBe("0.1.4");
+    expect(body.version).toBe(VERSION);
     expect(body.model).toBe("tarantul");
   });
 

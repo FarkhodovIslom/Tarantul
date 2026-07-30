@@ -5,6 +5,7 @@ import { getSessionUsage, formatUsageSummary } from "../agent/usage.js";
 import { EMPTY_FINAL_RESPONSE_MESSAGE } from "../utils/runtime.js";
 import { logger } from "../utils/logger.js";
 import { ServerStreamHook } from "./hook.js";
+import { VERSION } from "../version.js";
 import type { AgentRunner, AgentRunSpec } from "../agent/runner.js";
 import type { SessionManager } from "../session/manager.js";
 import type { ToolRegistry } from "../agent/tools/registry.js";
@@ -27,7 +28,6 @@ import type {
 const API_CHANNEL = "api";
 const API_CHAT_ID = "default";
 const DEFAULT_SESSION_KEY = "api:default";
-const VERSION = "0.1.4";
 
 /** Bounds for the client-supplied session_id — see isValidSessionId(). */
 const SESSION_ID_MAX_LENGTH = 128;
