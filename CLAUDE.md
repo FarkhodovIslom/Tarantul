@@ -66,3 +66,17 @@ When touching these, prefer conditional-copy (return the same reference when not
 ## Tests
 
 `bun test` runs all suites in `tests/` (one file per subsystem: `agent-core`, `api`, `channels`, `cli`, `config`, `cron-memory`, `providers`, `session-bus`, `skills`, `tools`, `utils`). Coverage is enabled by default and the per-test timeout is 30s (`bunfig.toml`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical five: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
