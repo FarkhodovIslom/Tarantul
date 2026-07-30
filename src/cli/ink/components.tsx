@@ -50,6 +50,10 @@ export function Banner({ version, model }: { version: string; model: string }): 
  * Top-bordered block for messages/assistant output.
  * Clean tiling window manager layout with Tiffany accents.
  */
+/**
+ * Content block for messages/assistant output.
+ * Clean layout with Tiffany accents.
+ */
 function WindowBlock({
   children,
   header,
@@ -61,11 +65,6 @@ function WindowBlock({
     <Box
       flexDirection="column"
       width="100%"
-      borderStyle="single"
-      borderColor={tiffany.selection}
-      borderRight={false}
-      borderLeft={false}
-      borderBottom={false}
       paddingY={1}
       paddingX={2}
       marginBottom={1}
@@ -104,14 +103,23 @@ export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
   switch (item.kind) {
     case "user":
       return (
-        <Box flexDirection="column" width="100%" paddingX={2} marginY={1}>
-          <Box
-            backgroundColor={tiffany.selection}
-            paddingX={2}
-            paddingY={1}
-            width="100%"
-          >
-            <Text color={tiffany.primary} bold>{"❯ You: "}</Text>
+        <Box
+          flexDirection="column"
+          width="100%"
+          borderStyle="single"
+          borderColor={tiffany.selection}
+          borderTop={true}
+          borderRight={false}
+          borderLeft={false}
+          borderBottom={false}
+          paddingY={1}
+          paddingX={2}
+          marginTop={1}
+        >
+          <Box gap={1}>
+            <Text color={tiffany.primary} bold>{"❯ You"}</Text>
+          </Box>
+          <Box marginTop={0}>
             <Text color={tiffany.fg}>{item.text}</Text>
           </Box>
         </Box>
