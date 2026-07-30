@@ -218,31 +218,43 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   const port = portOverride ? Number.parseInt(portOverride, 10) : cfg.api.port;
   const timeoutSecs = cfg.api.timeout;
   const apiKey = cfg.api.apiKey || null;
-  const modelName = cfg.agents.defaults.model;
 
-  const provider = createProvider(cfg);
+  // --- Mutable provider / runner (rebuilt by SettingsController on model switch) ---
+  let provider = createProvider(cfg);
+  let runner = new AgentRunner(provider);
   const sessions = new SessionManager(wsPath);
+
+  // --- Permission registry (per-tool [Allow]/[Cancel] via API) ---
+  const { PermissionRegistry } = await import("../api/permissions.js");
+  const permissionRegistry = new PermissionRegistry();
+
+  // Build a per-session AskPermission callback. For the API server we use a
+  // shared registry; the sessionKey is bound dynamically via wrapTurn below.
+  let activePermSessionKey = "api:default";
+  const askPermission: AskPermission = async (req) =>
+    permissionRegistry.buildAskPermission(activePermSessionKey)(req);
+
+  // --- Tool registry (with permission prompts) ---
   const tools = new ToolRegistry();
   const restrictWs = cfg.tools.restrictToWorkspace;
   const allowedDir = restrictWs ? wsPath : undefined;
   const extraRead = restrictWs ? [BUILTIN_SKILLS_DIR] : undefined;
-  tools.register(new ReadFileTool(wsPath, allowedDir, extraRead));
-  tools.register(new WriteFileTool(wsPath, allowedDir));
-  tools.register(new EditFileTool(wsPath, allowedDir));
-  tools.register(new ListDirTool(wsPath, allowedDir));
+  tools.register(new ReadFileTool(wsPath, allowedDir, extraRead, askPermission));
+  tools.register(new WriteFileTool(wsPath, allowedDir, null, askPermission));
+  tools.register(new EditFileTool(wsPath, allowedDir, null, askPermission));
+  tools.register(new ListDirTool(wsPath, allowedDir, null, askPermission));
   if (cfg.tools.exec.enable) {
     tools.register(
       new ExecTool({
         workingDir: wsPath,
         timeout: cfg.tools.exec.timeout,
         restrictToWorkspace: restrictWs,
+        askPermission,
       }),
     );
   }
   if (cfg.tools.web.enable) {
     tools.register(new WebFetchTool(cfg.tools.web.proxy, cfg.tools.web.allowPrivateAddresses));
-    // web_search is always available — the default provider (DuckDuckGo) needs
-    // no API key; keyed providers surface a config hint at call time if unset.
     tools.register(
       new WebSearchTool({
         provider: cfg.tools.web.search.provider,
@@ -253,8 +265,7 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
       }),
     );
   }
-  // Memory tools — long-term memory search/read/write over per-session MEMORY.md
-  // + daily logs + linked notes (hybrid keyword + embeddings when a key is present).
+  // Memory tools
   let memoryService: MemorySearchService | null = null;
   if (cfg.tools.memory.enable) {
     memoryService = buildMemoryService(cfg, wsPath);
@@ -264,13 +275,12 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     tools.register(new MemoryWriteTool(memoryService));
   }
 
-  // MCP servers — best-effort: a server that fails to connect is skipped
-  // with a warning (see agent/tools/mcp.ts), never fatal to startup.
+  // MCP servers
   const mcpConnections = await connectAllMcpServers(cfg.tools.mcpServers, tools);
 
   const bus = new MessageBus();
 
-  // Cron service — its onJob callback is late-bound to the AgentLoop below.
+  // Cron service
   let loop: AgentLoop | null = null;
   const cron = new CronService(join(getCronDir(), "jobs.json"), (job) =>
     loop ? loop.handleCronJob(job) : Promise.resolve(null),
@@ -278,11 +288,10 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
   const cronTool = new CronTool(cron, cfg.agents.defaults.timezone);
   tools.register(cronTool);
 
-  const runner = new AgentRunner(provider);
   const activeModel = resolveActiveModel(cfg);
   const runSpec = {
     tools,
-    model: modelName,
+    model: cfg.agents.defaults.model,
     maxIterations: activeModel.maxToolIterations,
     maxToolResultChars: activeModel.maxToolResultChars,
     temperature: activeModel.temperature,
@@ -303,11 +312,21 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     return promptCache.get(key, memory, skillsSummary, alwaysContent, tools.toolNames);
   };
 
-  // Memory consolidation — compresses long sessions into MEMORY.md/HISTORY.md.
+  // --- SettingsController (same as CLI Agent — model/provider changes rebuild runtime) ---
+  const settings = new SettingsController(cfg, getConfigPath(), {
+    onProviderChange: () => {
+      provider = createProvider(cfg);
+      runner = new AgentRunner(provider);
+      // Update runSpec model name to reflect the new model
+      (runSpec as Record<string, unknown>)["model"] = cfg.agents.defaults.model;
+    },
+  });
+
+  // Memory consolidation
   const consolidator = new MemoryConsolidator({
     workspace: wsPath,
     provider,
-    model: modelName,
+    model: cfg.agents.defaults.model,
     sessions,
     contextWindowTokens: activeModel.contextWindowTokens,
     maxCompletionTokens: activeModel.maxTokens,
@@ -321,7 +340,6 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
         timezone: cfg.agents.defaults.timezone,
       }),
     getToolDefinitions: () => tools.getDefinitions(),
-    // Immediately refresh the search index after consolidation writes notes/logs.
     ...(memoryService ? { onConsolidated: (key: string) => memoryService?.reindex(key) } : {}),
   });
 
@@ -339,16 +357,35 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
     sendProgress: cfg.channels.sendProgress,
   });
 
+  const startedAt = Math.floor(Date.now() / 1000);
+
   const { startApiServer } = await import("../api/server.js");
   const server = startApiServer(
     {
       host,
       port,
       timeoutSecs,
-      modelName,
+      modelName: cfg.agents.defaults.model,
       apiKey,
       getSystemPrompt,
-      wrapTurn: memoryService ? (key, fn) => memoryService?.runWithSession(key, fn) : null,
+      wrapTurn: memoryService
+        ? (key, fn) => {
+            activePermSessionKey = key;
+            return memoryService!.runWithSession(key, fn);
+          }
+        : (key, fn) => {
+            activePermSessionKey = key;
+            return fn();
+          },
+      workspace: wsPath,
+      settings,
+      onProviderRebuild: () => {
+        provider = createProvider(cfg);
+        runner = new AgentRunner(provider);
+        (runSpec as Record<string, unknown>)["model"] = cfg.agents.defaults.model;
+      },
+      permissions: permissionRegistry,
+      startedAt,
     },
     runner,
     sessions,
@@ -362,7 +399,8 @@ async function cmdServe(args: ParsedArgs): Promise<void> {
 
   console.log(`${LOGO} tarantul`);
   console.log(`  API      : ${styled(`${server.url}/v1/chat/completions`, ansi.cyan)}`);
-  console.log(`  Model    : ${styled(modelName, ansi.cyan)}`);
+  console.log(`  Model    : ${styled(cfg.agents.defaults.model, ansi.cyan)}`);
+  console.log(`  Endpoints: ${styled(`${server.url}/v1/help`, ansi.dim)}`);
   const chNames = channelManager.enabledChannels;
   if (chNames.length > 0) {
     console.log(`  Channels : ${styled(chNames.join(", "), ansi.cyan)}`);

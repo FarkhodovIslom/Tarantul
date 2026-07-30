@@ -76,14 +76,7 @@ export interface ApiServerOpts {
   // --- New opts for parity with CLI Agent mode ---
 
   /** SettingsController for model/settings mutation endpoints. */
-  settings?: {
-    overview(): Record<string, unknown>;
-    setActiveModel(providerName: string, modelId: string): { ok: boolean; error?: string };
-    configuredProviders(): { name: string; label: string; modelCount: number }[];
-    providerModels(providerName: string): string[];
-    setValue(path: string, rawValue: string): { ok: boolean; error?: string };
-    getValue(path: string): unknown;
-  } | null;
+  settings?: import("../config/settings.js").SettingsController | null;
 
   /** Called after a settings/model change that should rebuild the runner. */
   onProviderRebuild?: (() => void) | null;

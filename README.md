@@ -20,6 +20,7 @@ Tarantul is a Bun-native, zero-framework AI assistant that remembers you across 
 
 - [Why Tarantul](#why-tarantul)
 - [Quick Start](#quick-start)
+- [Server Mode (API Server)](#server-mode-api-server)
 - [Long-term Memory](#long-term-memory)
 - [Features](#features)
 - [Configuration](#configuration)
@@ -175,9 +176,12 @@ All channels support ACL via `allowFrom` lists, streaming deltas, and configurab
 
 Extensible skills discovered from `SKILL.md` files with YAML frontmatter. Built-ins include `memory`, `cron`, `github`, `summarize`, `weather`, `tmux`, and `skill-creator`. Workspace skills (`~/.tarantul/workspace/skills/`) take priority over built-ins, and a skill can declare binary/env requirements that are checked at load time.
 
-### OpenAI-Compatible API
+### Server Mode (API Server)
+
+Tarantul provides a full-featured HTTP server (`bun run start serve`) with **100% feature parity** to the CLI Agent mode:
 
 ```bash
+# Chat turn with tool loop execution
 curl http://localhost:8900/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-api-key" \
@@ -187,11 +191,15 @@ curl http://localhost:8900/v1/chat/completions \
   }'
 ```
 
-- `POST /v1/chat/completions` — chat with the full tool-execution loop
-- `GET /v1/models` — list available models
-- `GET /health` — health check
+**Key Capabilities:**
+- ⚡ **OpenAI-Compatible & SSE Streaming** — `POST /v1/chat/completions` with optional `"stream": true` for real-time deltas and tool execution metadata.
+- 🗂️ **Session Multiplexing & Management** — Pass `session_id` to route conversations to isolated session keys (`api:<session_id>`); manage sessions via `/v1/sessions` (list, create, delete, clear).
+- 🛑 **Request Cancellation** — Cancel in-flight turns via `POST /v1/cancel` or auto-abort on client HTTP disconnect.
+- 🛡️ **Tool Permission Prompts** — Park guard-blocked tool actions for remote review via `/v1/permissions/pending` & `/v1/permissions/:id/resolve`.
+- ⚙️ **Runtime Settings & Model Switching** — Inspect and mutate config live via `/v1/settings` and `/v1/settings/model`.
+- 📊 **Status & Usage** — Query server health (`/health`), version & uptime (`/v1/status`), and session token costs (`/v1/usage`).
 
-Session multiplexing is supported via a `session_id` extension field.
+📖 **[Read the complete Server Mode documentation](docs/SERVE_MODE.md)** for detailed cURL examples and endpoint specifications.
 
 ### Background Services
 

@@ -285,7 +285,7 @@ describe("POST /v1/chat/completions — validation errors", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 400 for stream=true", async () => {
+  it("returns 200 with SSE for stream=true", async () => {
     server = startServer(makeMockRunner("ok"));
     baseUrl = server.url;
 
@@ -297,7 +297,12 @@ describe("POST /v1/chat/completions — validation errors", () => {
         messages: [{ role: "user", content: "hi" }],
       }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+
+    // Read the SSE body — it should contain at least `data: [DONE]`
+    const body = await res.text();
+    expect(body).toContain("data: [DONE]");
   });
 
   it("returns 400 for wrong model name", async () => {
@@ -449,3 +454,151 @@ describe("Unknown routes", () => {
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// New Server Mode Endpoints (Parity with CLI Agent)
+// ---------------------------------------------------------------------------
+
+describe("Session management endpoints", () => {
+  it("GET /v1/sessions lists sessions", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/sessions`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessions: Array<{ key: string }> };
+    expect(Array.isArray(body.sessions)).toBe(true);
+  });
+
+  it("POST /v1/sessions creates a new session", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: "test_session_1" }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { session_id: string; key: string };
+    expect(body.session_id).toBe("test_session_1");
+    expect(body.key).toBe("api:test_session_1");
+  });
+
+  it("DELETE /v1/sessions/:id deletes a session", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    // Create session first
+    await fetch(`${baseUrl}/v1/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: "to_delete" }),
+    });
+
+    const res = await fetch(`${baseUrl}/v1/sessions/to_delete`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { deleted: boolean };
+    expect(body.deleted).toBe(true);
+  });
+
+  it("POST /v1/sessions/:id/clear clears a session's messages", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/sessions/test_clear/clear`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { cleared: boolean };
+    expect(body.cleared).toBe(true);
+  });
+});
+
+describe("Cancellation endpoint", () => {
+  it("POST /v1/cancel returns 200 even when no request is in-flight", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: "default" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { cancelled: boolean };
+    expect(body.cancelled).toBe(false);
+  });
+
+  it("POST /v1/cancel returns 400 when session_id is missing", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("Status, Usage, and Help endpoints", () => {
+  it("GET /v1/status returns uptime and version", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/status`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { version: string; model: string };
+    expect(body.version).toBe("0.1.4");
+    expect(body.model).toBe("tarantul");
+  });
+
+  it("GET /v1/usage returns session usage", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/usage`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { formatted: string };
+    expect(typeof body.formatted).toBe("string");
+  });
+
+  it("GET /v1/help lists all available endpoints", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/help`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { endpoints: Array<{ method: string; path: string }> };
+    expect(body.endpoints.length).toBeGreaterThan(10);
+  });
+});
+
+describe("Permissions endpoints", () => {
+  it("GET /v1/permissions/pending returns empty list when none pending", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/permissions/pending`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { pending: unknown[] };
+    expect(Array.isArray(body.pending)).toBe(true);
+  });
+
+  it("POST /v1/permissions/:id/resolve returns 404 for unknown permission", async () => {
+    server = startServer(makeMockRunner("ok"));
+    baseUrl = server.url;
+
+    const res = await fetch(`${baseUrl}/v1/permissions/non_existent/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allow: true }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
