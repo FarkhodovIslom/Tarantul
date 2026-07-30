@@ -91,7 +91,7 @@ export function ToolLine({
   return (
     <Box flexDirection="column" paddingX={2} marginBottom={1}>
       <Text>
-        <Text color={ok ? tiffany.green : tiffany.red}>{ok ? "[+] " : "[-] "}</Text>
+        <Text color={ok ? tiffany.green : tiffany.red}>{ok ? "[✓] " : "[×] "}</Text>
         <Text bold color={tiffany.fg}>{label}</Text>
       </Text>
       {capped ? <Text color={tiffany.comment}>{`  └─ ${capped}`}</Text> : null}
@@ -158,9 +158,12 @@ export function Spinner({ label }: { label: string }): React.ReactElement {
   }, [start]);
 
   return (
-    <Box paddingX={2} paddingY={1} gap={1}>
-      <Text color={tiffany.secondary} bold>{SPINNER_FRAMES[frame]}</Text>
-      <Text color={tiffany.comment}>{`${label} (${secs}s)`}</Text>
+    <Box paddingX={2} paddingY={1} justifyContent="space-between" width="100%">
+      <Box gap={1}>
+        <Text color={tiffany.secondary} bold>{SPINNER_FRAMES[frame]}</Text>
+        <Text color={tiffany.comment}>{`${label} (${secs}s)`}</Text>
+      </Box>
+      <Text color={tiffany.comment}>ctrl+c to cancel</Text>
     </Box>
   );
 }

@@ -439,7 +439,7 @@ export function App(props: AppProps): React.ReactElement {
 
       {state.selector ? (
         <SelectPrompt spec={state.selector.spec} selectedIndex={selIndex} />
-      ) : (
+      ) : state.busy ? null : (
         <>
           {acVisible ? <SuggestionList items={suggestions} selectedIndex={acIndex} /> : null}
           <InputBar

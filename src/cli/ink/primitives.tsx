@@ -37,8 +37,8 @@ export function Badge({
   label: string;
 }): React.ReactElement {
   const config = {
-    success: { symbol: "[+]", color: tiffany.green },
-    error: { symbol: "[-]", color: tiffany.red },
+    success: { symbol: "[✓]", color: tiffany.green },
+    error: { symbol: "[×]", color: tiffany.red },
     pending: { symbol: "[~]", color: tiffany.secondary },
     info: { symbol: "[!]", color: tiffany.orange },
   }[type];
