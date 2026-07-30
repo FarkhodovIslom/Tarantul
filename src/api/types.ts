@@ -72,4 +72,53 @@ export interface ApiServerOpts {
   wrapTurn?: (<T>(key: string, fn: () => Promise<T>) => Promise<T>) | null;
   /** Workspace path (for channel metadata) */
   workspace?: string | null;
+
+  // --- New opts for parity with CLI Agent mode ---
+
+  /** SettingsController for model/settings mutation endpoints. */
+  settings?: {
+    overview(): Record<string, unknown>;
+    setActiveModel(providerName: string, modelId: string): { ok: boolean; error?: string };
+    configuredProviders(): { name: string; label: string; modelCount: number }[];
+    providerModels(providerName: string): string[];
+    setValue(path: string, rawValue: string): { ok: boolean; error?: string };
+    getValue(path: string): unknown;
+  } | null;
+
+  /** Called after a settings/model change that should rebuild the runner. */
+  onProviderRebuild?: (() => void) | null;
+
+  /** Permission registry for tool approval prompts. */
+  permissions?: {
+    listPending(): Array<{ id: string; request: { tool: string; action: string; reason: string }; sessionKey: string; createdAt: string }>;
+    resolve(id: string, allow: boolean): boolean;
+  } | null;
+
+  /** Server start timestamp (for /v1/status uptime). */
+  startedAt?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Cancel request
+// ---------------------------------------------------------------------------
+
+export interface CancelRequest {
+  session_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Settings mutation
+// ---------------------------------------------------------------------------
+
+export interface SetModelRequest {
+  provider: string;
+  model: string;
+  /** If true, persist the change to config.json (default: false, in-memory only). */
+  persist?: boolean;
+}
+
+export interface SettingsPatchRequest {
+  /** Dotted config path, e.g. "agents.defaults.temperature" */
+  path: string;
+  value: string;
 }

@@ -70,6 +70,19 @@ export class Session implements SessionData {
   }
 
   /**
+   * Batch-append messages produced by the runner (assistant + tool_calls +
+   * tool results). Each message gets a timestamp stamped; `updatedAt` is
+   * bumped once at the end.
+   */
+  addMessages(msgs: Record<string, unknown>[], timestamp?: string): void {
+    const ts = timestamp ?? new Date().toISOString();
+    for (const m of msgs) {
+      this.messages.push({ ...m, timestamp: ts });
+    }
+    if (msgs.length > 0) this.updatedAt = new Date();
+  }
+
+  /**
    * Return unconsolidated messages aligned to a legal tool-call boundary.
    * When maxMessages=0 all unconsolidated messages are returned.
    */
