@@ -28,9 +28,21 @@ export class InkHook extends AgentHook {
     return true;
   }
 
+  override async beforeIteration(_ctx: AgentHookContext): Promise<void> {
+    this.didStream = false;
+    this.bridge.emitEvent({ t: "busy", value: true, label: "Thinking…" });
+  }
+
+  override async beforeExecuteTools(_ctx: AgentHookContext): Promise<void> {
+    this.bridge.emitEvent({ t: "busy", value: true, label: "Working…" });
+  }
+
   override async onStream(_ctx: AgentHookContext, delta: string): Promise<void> {
     if (delta) {
-      this.didStream = true;
+      if (!this.didStream) {
+        this.didStream = true;
+        this.bridge.emitEvent({ t: "busy", value: true, label: "Writing…" });
+      }
       this.bridge.emitEvent({ t: "assistant-delta", text: delta });
     }
   }
@@ -45,6 +57,7 @@ export class InkHook extends AgentHook {
     const id = `t${this.toolSeq++}`;
     this.idFor.set(tc, id);
     this.bridge.emitEvent({ t: "tool-start", id, label: toolCallLabel(tc.name, tc.arguments) });
+    this.bridge.emitEvent({ t: "busy", value: true, label: "Working…" });
   }
 
   override async onToolEnd(
