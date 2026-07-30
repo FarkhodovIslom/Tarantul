@@ -335,4 +335,4 @@ For larger features, please open an issue first to discuss the approach.
 
 ## License
 
-[MIT](LICENSE) © Islom Farkhodov
+[MIT](LICENSE) © hanzodev
