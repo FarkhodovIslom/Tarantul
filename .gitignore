@@ -51,3 +51,6 @@ bun-crash.txt
 .claude
 .agent
 .zcode
+
+# Personal Obsidian vault (project plans, todos, walkthroughs)
+obsidian/
