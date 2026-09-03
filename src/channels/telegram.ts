@@ -1,4 +1,3 @@
-
 import { Bot, Context, InputFile } from "grammy";
 import type { Message, User } from "@grammyjs/types";
 import { logger } from "../utils/logger.js";
@@ -135,13 +134,18 @@ export class TelegramChannel extends BaseChannel {
   private readonly _typingTimers = new Map<string, ReturnType<typeof setInterval>>();
   private readonly _streamBufs = new Map<string, StreamBuf>();
   /** chatId → pending media group contents */
-  private readonly _mediaGroups = new Map<string, {
-    senderId: string; chatId: string;
-    contents: string[]; media: string[];
-    metadata: Record<string, unknown>;
-    sessionKey?: string;
-    timer?: ReturnType<typeof setTimeout>;
-  }>();
+  private readonly _mediaGroups = new Map<
+    string,
+    {
+      senderId: string;
+      chatId: string;
+      contents: string[];
+      media: string[];
+      metadata: Record<string, unknown>;
+      sessionKey?: string;
+      timer?: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(config: Record<string, unknown>, bus: MessageBus) {
     super(config, bus);
@@ -167,7 +171,10 @@ export class TelegramChannel extends BaseChannel {
 
   override async start(): Promise<void> {
     const token = this.config["token"] as string | undefined;
-    if (!token) { logger.error("Telegram token not configured"); return; }
+    if (!token) {
+      logger.error("Telegram token not configured");
+      return;
+    }
 
     this._running = true;
 
@@ -234,7 +241,10 @@ export class TelegramChannel extends BaseChannel {
     if (!msg.metadata?.["_progress"]) this._stopTyping(msg.chatId);
 
     const chatId = parseInt(msg.chatId, 10);
-    if (isNaN(chatId)) { logger.error({ chatId: msg.chatId }, "Invalid Telegram chat_id"); return; }
+    if (isNaN(chatId)) {
+      logger.error({ chatId: msg.chatId }, "Invalid Telegram chat_id");
+      return;
+    }
 
     const threadId = (msg.metadata?.["message_thread_id"] as number | undefined) ?? undefined;
     const replyToId = (msg.metadata?.["message_id"] as number | undefined) ?? undefined;
@@ -242,9 +252,10 @@ export class TelegramChannel extends BaseChannel {
     const extra: Record<string, unknown> = {};
     if (threadId != null) extra["message_thread_id"] = threadId;
 
-    const replyParams = (this.config["replyToMessage"] && replyToId != null)
-      ? { reply_parameters: { message_id: replyToId, allow_sending_without_reply: true } }
-      : {};
+    const replyParams =
+      this.config["replyToMessage"] && replyToId != null
+        ? { reply_parameters: { message_id: replyToId, allow_sending_without_reply: true } }
+        : {};
 
     // Media attachments
     for (const mediaPath of msg.media ?? []) {
@@ -252,7 +263,9 @@ export class TelegramChannel extends BaseChannel {
         const isUrl = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
         const ext = mediaPath.split(".").pop()?.toLowerCase() ?? "";
         const isPhoto = ["jpg", "jpeg", "png", "gif", "webp"].includes(ext);
-        const file = isUrl ? mediaPath : new InputFile(new Uint8Array(await Bun.file(mediaPath).arrayBuffer()));
+        const file = isUrl
+          ? mediaPath
+          : new InputFile(new Uint8Array(await Bun.file(mediaPath).arrayBuffer()));
         if (isPhoto) {
           await this._bot.api.sendPhoto(chatId, file, { ...extra, ...replyParams } as never);
         } else {
@@ -271,7 +284,11 @@ export class TelegramChannel extends BaseChannel {
     }
   }
 
-  private async _sendText(chatId: number, text: string, extra: Record<string, unknown>): Promise<void> {
+  private async _sendText(
+    chatId: number,
+    text: string,
+    extra: Record<string, unknown>,
+  ): Promise<void> {
     if (!this._bot) return;
     try {
       const html = mdToHtml(text);
@@ -289,7 +306,11 @@ export class TelegramChannel extends BaseChannel {
   // sendDelta (streaming)
   // ---------------------------------------------------------------------------
 
-  override async sendDelta(chatId: string, delta: string, metadata?: Record<string, unknown>): Promise<void> {
+  override async sendDelta(
+    chatId: string,
+    delta: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
     if (!this._bot) return;
     const meta = metadata ?? {};
     const intId = parseInt(chatId, 10);
@@ -303,7 +324,9 @@ export class TelegramChannel extends BaseChannel {
       this._stopTyping(chatId);
       try {
         const html = mdToHtml(buf.text);
-        await this._bot.api.editMessageText(intId, buf.messageId, html, { parse_mode: "HTML" } as never);
+        await this._bot.api.editMessageText(intId, buf.messageId, html, {
+          parse_mode: "HTML",
+        } as never);
       } catch {
         try {
           await this._bot.api.editMessageText(intId, buf.messageId, buf.text);
@@ -355,17 +378,19 @@ export class TelegramChannel extends BaseChannel {
 
   private async _onStart(ctx: Context): Promise<void> {
     const name = ctx.from?.first_name ?? "friend";
-    await ctx.reply(`👋 Hi ${name}! I'm Tarantul.\nSend me a message and I'll respond!\n/help for commands.`);
+    await ctx.reply(
+      `👋 Hi ${name}! I'm Tarantul.\nSend me a message and I'll respond!\n/help for commands.`,
+    );
   }
 
   private async _onHelp(ctx: Context): Promise<void> {
     await ctx.reply(
       "🕷️ tarantul commands:\n" +
-      "/new — New conversation\n" +
-      "/stop — Stop current task\n" +
-      "/restart — Restart the bot\n" +
-      "/status — Show status\n" +
-      "/help — Show this help",
+        "/new — New conversation\n" +
+        "/stop — Stop current task\n" +
+        "/restart — Restart the bot\n" +
+        "/status — Show status\n" +
+        "/help — Show this help",
     );
   }
 
@@ -374,7 +399,9 @@ export class TelegramChannel extends BaseChannel {
   }
 
   private _deriveTopicSessionKey(message: Message): string | null {
-    const threadId = (message as unknown as Record<string, unknown>)["message_thread_id"] as number | undefined;
+    const threadId = (message as unknown as Record<string, unknown>)["message_thread_id"] as
+      | number
+      | undefined;
     if (message.chat.type === "private" || threadId == null) return null;
     return `telegram:${message.chat.id}:topic:${threadId}`;
   }
@@ -406,7 +433,7 @@ export class TelegramChannel extends BaseChannel {
     await this._handleMessage({
       senderId: this._senderId(user),
       chatId: String(message.chat.id),
-      content: (message as unknown as Record<string, unknown>)["text"] as string ?? "",
+      content: ((message as unknown as Record<string, unknown>)["text"] as string) ?? "",
       metadata: { message_id: message.message_id },
       ...(sessionKey != null ? { sessionKeyOverride: sessionKey } : {}),
     });
@@ -416,7 +443,7 @@ export class TelegramChannel extends BaseChannel {
     const user = ctx.from;
     const message = ctx.message;
     if (!user || !message) return;
-    if (!await this._isGroupMessageForBot(message)) return;
+    if (!(await this._isGroupMessageForBot(message))) return;
 
     const senderId = this._senderId(user);
     const chatId = String(message.chat.id);
@@ -445,9 +472,13 @@ export class TelegramChannel extends BaseChannel {
     // Add reaction (best effort)
     const reactEmoji = (this.config["reactEmoji"] as string | undefined) ?? "🕷️";
     if (reactEmoji) {
-      this._bot?.api.setMessageReaction(parseInt(chatId, 10), message.message_id, [
-        { type: "emoji", emoji: reactEmoji as never },
-      ]).catch(() => { /* ignore */ });
+      this._bot?.api
+        .setMessageReaction(parseInt(chatId, 10), message.message_id, [
+          { type: "emoji", emoji: reactEmoji as never },
+        ])
+        .catch(() => {
+          /* ignore */
+        });
     }
 
     const sessionKey = this._deriveTopicSessionKey(message);
@@ -469,7 +500,9 @@ export class TelegramChannel extends BaseChannel {
     const intId = parseInt(chatId, 10);
     if (isNaN(intId) || !this._bot) return;
     const sendTyping = () => {
-      this._bot?.api.sendChatAction(intId, "typing").catch(() => { /* ignore */ });
+      this._bot?.api.sendChatAction(intId, "typing").catch(() => {
+        /* ignore */
+      });
     };
     sendTyping();
     this._typingTimers.set(chatId, setInterval(sendTyping, 4000));
@@ -477,6 +510,9 @@ export class TelegramChannel extends BaseChannel {
 
   private _stopTyping(chatId: string): void {
     const timer = this._typingTimers.get(chatId);
-    if (timer) { clearInterval(timer); this._typingTimers.delete(chatId); }
+    if (timer) {
+      clearInterval(timer);
+      this._typingTimers.delete(chatId);
+    }
   }
 }

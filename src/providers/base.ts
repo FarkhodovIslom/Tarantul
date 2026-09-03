@@ -139,7 +139,7 @@ const ALLOWED_MSG_KEYS = new Set([
   "tool_call_id",
   "name",
   "reasoning_content",
-  "reasoning"
+  "reasoning",
 ]);
 
 export function sanitizeEmptyContent(
@@ -156,18 +156,13 @@ export function sanitizeEmptyContent(
     if (typeof content === "string" && content === "") {
       replacement = {
         ...msg,
-        content:
-          role === "assistant" && msg["tool_calls"] ? null : "(empty)",
+        content: role === "assistant" && msg["tool_calls"] ? null : "(empty)",
       };
     } else if (Array.isArray(content)) {
       const newItems: unknown[] = [];
       let changed = false;
       for (const item of content) {
-        if (
-          typeof item === "object" &&
-          item !== null &&
-          !Array.isArray(item)
-        ) {
+        if (typeof item === "object" && item !== null && !Array.isArray(item)) {
           const block = item as Record<string, unknown>;
           if (
             ["text", "input_text", "output_text"].includes(block["type"] as string) &&

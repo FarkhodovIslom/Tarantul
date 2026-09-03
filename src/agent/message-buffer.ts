@@ -129,9 +129,8 @@ export class MessageBuffer {
     if (totalBudget <= 0) return;
 
     // System message tokens are always consumed
-    const sysTokens = this.systemMsgIndex >= 0
-      ? estimateMessageTokens(this.msgs[this.systemMsgIndex]!)
-      : 0;
+    const sysTokens =
+      this.systemMsgIndex >= 0 ? estimateMessageTokens(this.msgs[this.systemMsgIndex]!) : 0;
     const nonSysBudget = Math.max(128, totalBudget - sysTokens);
 
     // Count from the end backwards — keep as many recent messages as possible
@@ -265,11 +264,7 @@ export class MessageBuffer {
 // Internal helper: fast token estimate of current window
 // ---------------------------------------------------------------------------
 
-function estimateCurrentTokens(
-  msgs: Message[],
-  windowStart: number,
-  sysIdx: number,
-): number {
+function estimateCurrentTokens(msgs: Message[], windowStart: number, sysIdx: number): number {
   let total = 0;
   for (let i = windowStart; i < msgs.length; i++) {
     total += estimateMessageTokens(msgs[i]!);

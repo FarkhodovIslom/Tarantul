@@ -92,9 +92,7 @@ export class ServerStreamHook extends AgentHook {
       choices: [
         {
           index: 0,
-          delta: this._needsRole
-            ? { role: "assistant", content: delta }
-            : { content: delta },
+          delta: this._needsRole ? { role: "assistant", content: delta } : { content: delta },
           finish_reason: null,
         },
       ],
@@ -167,7 +165,11 @@ export class ServerStreamHook extends AgentHook {
       this.controller.close();
     } catch {
       // Controller may already be closed (client disconnected) — ignore.
-      try { this.controller.close(); } catch { /* already closed */ }
+      try {
+        this.controller.close();
+      } catch {
+        /* already closed */
+      }
     }
   }
 
@@ -185,7 +187,11 @@ export class ServerStreamHook extends AgentHook {
       this._enqueue("data: [DONE]\n\n");
       this.controller.close();
     } catch {
-      try { this.controller.close(); } catch { /* already closed */ }
+      try {
+        this.controller.close();
+      } catch {
+        /* already closed */
+      }
     }
   }
 

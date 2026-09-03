@@ -13,7 +13,10 @@
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  StdioClientTransport,
+  getDefaultEnvironment,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -35,7 +38,9 @@ export class McpToolAdapter extends Tool {
   override readonly description: string;
   override readonly parameters: Record<string, unknown>;
   private readonly _readOnly: boolean;
-  override get readOnly(): boolean { return this._readOnly; }
+  override get readOnly(): boolean {
+    return this._readOnly;
+  }
 
   constructor(
     private readonly client: Client,
@@ -93,7 +98,10 @@ function mcpResultToToolOutput(result: McpCallToolResult): unknown {
         break;
       case "image": {
         const mime = String(b["mimeType"] ?? "image/png");
-        imageBlocks.push({ type: "image_url", image_url: { url: `data:${mime};base64,${String(b["data"] ?? "")}` } });
+        imageBlocks.push({
+          type: "image_url",
+          image_url: { url: `data:${mime};base64,${String(b["data"] ?? "")}` },
+        });
         break;
       }
       case "audio":
@@ -172,7 +180,8 @@ function buildTransport(name: string, config: MCPServerConfig): Transport {
 
   if (!config.url) throw new Error(`type is '${type}' but no url configured`);
   const url = new URL(config.url);
-  const requestInit: RequestInit = Object.keys(config.headers).length > 0 ? { headers: config.headers } : {};
+  const requestInit: RequestInit =
+    Object.keys(config.headers).length > 0 ? { headers: config.headers } : {};
 
   // The SDK's own transport classes have a structural mismatch against its
   // own `Transport` interface under this project's `exactOptionalPropertyTypes`
@@ -221,7 +230,11 @@ export async function connectMcpServer(
     listed = await client.listTools();
   } catch (err) {
     logger.warn({ mcpServer: name, err }, "MCP server listTools failed, skipping");
-    try { await client.close(); } catch { /* already broken, nothing to clean up */ }
+    try {
+      await client.close();
+    } catch {
+      /* already broken, nothing to clean up */
+    }
     return null;
   }
 
@@ -271,7 +284,9 @@ export async function connectAllMcpServers(
   const entries = Object.entries(servers);
   if (entries.length === 0) return [];
 
-  const results = await Promise.all(entries.map(([name, config]) => connectMcpServer(name, config)));
+  const results = await Promise.all(
+    entries.map(([name, config]) => connectMcpServer(name, config)),
+  );
 
   const connections: McpServerConnection[] = [];
   for (const conn of results) {
@@ -282,6 +297,8 @@ export async function connectAllMcpServers(
   return connections;
 }
 
-export async function closeAllMcpServers(connections: readonly McpServerConnection[]): Promise<void> {
+export async function closeAllMcpServers(
+  connections: readonly McpServerConnection[],
+): Promise<void> {
   await Promise.all(connections.map((c) => c.close()));
 }

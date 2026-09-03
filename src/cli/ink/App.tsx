@@ -1,16 +1,29 @@
-import { Box, Static, useApp, useInput } from "ink";
+import { Box, useApp, useInput, useStdout } from "ink";
+import { memo, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type React from "react";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { markdownToAnsi } from "../render.js";
 import { filterCommands } from "./commands.js";
 import { Banner, InputBar, Item, LiveRegion, SelectPrompt, SuggestionList } from "./components.js";
-import type {
-  ReplayEntry,
-  RunningTool,
-  SelectorSpec,
-  TranscriptItem,
-  UiBridge,
-  UiEvent,
-} from "./types.js";
+import { StatusBar, TipBar } from "./primitives.js";
+import { ScrollThumb } from "./ScrollThumb.js";
+import {
+  appSliceReduce,
+  deleteBeforeCursor,
+  historyNext,
+  historyPrev,
+  initialLiveSlice,
+  initialTranscriptSlice,
+  initialUiSlice,
+  insertChar,
+  moveCursorLeft,
+  moveCursorRight,
+  resetInput,
+} from "./state.js";
+import type { UiSlice } from "./state.js";
+import { rows } from "./theme.js";
+import type { ReplayEntry, SelectorSpec, TranscriptItem, UiBridge } from "./types.js";
+import { WindowedList, type WindowedListRef } from "./WindowedList.js";
+import { TitleBar } from "./TitleBar.js";
 
 export interface AppProps {
   bridge: UiBridge;
@@ -42,176 +55,172 @@ interface PendingSelector {
   resolve: (index: number | null) => void;
 }
 
-interface State {
-  nextId: number;
-  items: TranscriptItem[];
-  liveAssistant: string;
-  liveTools: RunningTool[];
-  busy: boolean;
-  busyLabel: string | null;
-  selector: PendingSelector | null;
-  /** Bumped on `clear`. Keys <Static> so it remounts and re-renders the
-   *  post-clear items — Ink's <Static> is otherwise append-only and silently
-   *  drops items once the list shrinks below its high-water index. */
-  generation: number;
-}
-
-type Action =
-  | { type: "submit-user"; text: string }
-  | { type: "set-selector"; value: PendingSelector | null }
-  | { type: "event"; e: UiEvent };
-
-function timeStamp(): string {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function push(state: State, item: TranscriptItem): State {
-  return { ...state, nextId: state.nextId + 1, items: [...state.items, item] };
-}
-
-/** An assistant item without a model footer (mid-turn flush / replayed history). */
-function bareAssistant(id: number, text: string): TranscriptItem {
-  return { id, kind: "assistant", text, model: "", time: "" };
-}
-
-function initState(props: AppProps): State {
+function seedItems(initial: ReplayEntry[]): { nextId: number; items: TranscriptItem[] } {
   let nextId = 1;
   const items: TranscriptItem[] = [];
-  for (const entry of props.initialTranscript) {
-    items.push(
-      entry.role === "user"
-        ? { id: nextId++, kind: "user", text: entry.text }
-        : bareAssistant(nextId++, entry.text),
-    );
+  for (const entry of initial) {
+    if (entry.role === "user") {
+      items.push({ id: nextId++, kind: "user", text: entry.text });
+    } else {
+      items.push({ id: nextId++, kind: "assistant", text: entry.text, model: "", time: "" });
+    }
   }
-  return {
-    nextId,
-    items,
-    liveAssistant: "",
-    liveTools: [],
-    busy: false,
-    busyLabel: null,
-    selector: null,
-    generation: 0,
-  };
+  return { nextId, items };
 }
 
-function reduce(state: State, action: Action): State {
-  switch (action.type) {
-    case "submit-user":
-      return push(state, { id: state.nextId, kind: "user", text: action.text });
-    case "set-selector":
-      return { ...state, selector: action.value };
-    case "event":
-      break;
-  }
+// ---------------------------------------------------------------------------
+// Markdown memoization. Caching the parsed ANSI by `${id}:${hash}` keeps the
+// expensive render step O(1) on subsequent re-renders of finalized items.
+// ---------------------------------------------------------------------------
 
-  const e = action.e;
-  switch (e.t) {
-    case "assistant-delta":
-      return { ...state, liveAssistant: state.liveAssistant + e.text };
-    case "assistant-end": {
-      if (!state.liveAssistant) return state;
-      return {
-        ...push(state, {
-          id: state.nextId,
-          kind: "assistant",
-          text: state.liveAssistant,
-          model: e.model,
-          time: timeStamp(),
-        }),
-        liveAssistant: "",
-      };
-    }
-    case "tool-start": {
-      // Flush any pending assistant text first so tool lines stay in order.
-      let s = state;
-      if (s.liveAssistant) {
-        s = { ...push(s, bareAssistant(s.nextId, s.liveAssistant)), liveAssistant: "" };
-      }
-      return { ...s, liveTools: [...s.liveTools, { id: e.id, label: e.label }] };
-    }
-    case "tool-end": {
-      const running = state.liveTools.find((t) => t.id === e.id);
-      return {
-        ...push(state, {
-          id: state.nextId,
-          kind: "tool",
-          label: running?.label ?? "tool",
-          ok: e.ok,
-          detail: e.detail,
-        }),
-        liveTools: state.liveTools.filter((t) => t.id !== e.id),
-      };
-    }
-    case "notice":
-      return push(state, { id: state.nextId, kind: "notice", text: e.text, tone: e.tone });
-    case "busy":
-      return { ...state, busy: e.value, busyLabel: e.value ? (e.label ?? null) : null };
-    case "select":
-      return { ...state, selector: { spec: e.spec, resolve: e.resolve } };
-    case "replay": {
-      // Never reset nextId — <Static> has already committed earlier ids.
-      let s = state;
-      for (const entry of e.entries) {
-        s = push(
-          s,
-          entry.role === "user"
-            ? { id: s.nextId, kind: "user", text: entry.text }
-            : bareAssistant(s.nextId, entry.text),
-        );
-      }
-      return s;
-    }
-    case "clear":
-      return {
-        ...state,
-        items: [],
-        liveAssistant: "",
-        liveTools: [],
-        generation: state.generation + 1,
-      };
-    default:
-      return state;
-  }
+function textHash(s: string): number {
+  let h = s.length ^ 0x9e3779b9;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x85ebca6b);
+  return h >>> 0;
 }
+
+const markdownCache = new Map<string, string>();
+
+function cachedMarkdown(id: number, text: string): string {
+  const key = `${id}:${textHash(text)}`;
+  const hit = markdownCache.get(key);
+  if (hit !== undefined) return hit;
+  const rendered = markdownToAnsi(text);
+  // Bound the cache so a very long session does not grow without limit.
+  if (markdownCache.size > 2048) markdownCache.clear();
+  markdownCache.set(key, rendered);
+  return rendered;
+}
+
+// ---------------------------------------------------------------------------
+// Memoized item wrapper. Assistant items pre-compute their markdown render so
+// the inner Item component stays free of expensive work.
+// ---------------------------------------------------------------------------
+
+const MemoizedItem = memo(
+  function MemoizedItem({ item }: { item: TranscriptItem }) {
+    if (item.kind === "assistant") {
+      return <Item item={item} renderedText={cachedMarkdown(item.id, item.text)} />;
+    }
+    return <Item item={item} />;
+  },
+  (prev, next) => prev.item === next.item,
+);
 
 export function App(props: AppProps): React.ReactElement {
   const { exit } = useApp();
-  const [state, dispatch] = useReducer(reduce, props, initState);
+  const { stdout } = useStdout();
 
-  const [input, setInput] = useState("");
-  const [cursor, setCursor] = useState(0);
-  const [histIdx, setHistIdx] = useState(props.history.length);
-  const [localHistory, setLocalHistory] = useState(props.history);
-  const [selIndex, setSelIndex] = useState(0);
-  const [acIndex, setAcIndex] = useState(0);
-  // Input value the autocomplete list was dismissed for (Tab/Esc). Suggestions
-  // reappear as soon as the input diverges from it — i.e. on the next edit.
-  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
-  // Guards the exit flow: first request runs onBeforeExit; a second force-quits.
+  // -------------------------------------------------------------------------
+  // One combined reducer for the transcript + live slices. They are coupled
+  // by events (assistant-end / tool-start / tool-end span both), so a single
+  // reducer is the correct shape — see appSliceReduce in state.ts.
+  // -------------------------------------------------------------------------
+
+  const seeded = useMemo(() => seedItems(props.initialTranscript), [props.initialTranscript]);
+  const [slices, dispatchSlice] = useReducer(appSliceReduce, undefined, () => ({
+    transcript: initialTranscriptSlice(seeded.nextId, seeded.items),
+    live: initialLiveSlice,
+  }));
+  const transcript = slices.transcript;
+  const live = slices.live;
+
+  // -------------------------------------------------------------------------
+  // UiSlice + history + selector. `localHistory` lives outside the reducer
+  // because it is only touched on submit (rare) and history navigation.
+  // `ui.histIdx` is seeded to `history.length` so the first ↑ loads the most
+  // recent entry instead of the oldest (was 0 → jumped to entries[0]).
+  // -------------------------------------------------------------------------
+
+  const [ui, setUi] = useState<UiSlice>(() => ({
+    ...initialUiSlice,
+    histIdx: props.history.length,
+  }));
+  const [history, setHistory] = useState<string[]>(props.history);
+  const [selector, setSelector] = useState<PendingSelector | null>(null);
+
   const exitingRef = useRef(false);
-  // True once a Ctrl-C stop has been requested for the turn currently
-  // running — reset as soon as busy clears. Lets a second Ctrl-C force-quit
-  // if the stop itself never resolves (e.g. a provider that ignores abort).
   const stopRequestedRef = useRef(false);
+  const scrollRef = useRef<WindowedListRef>(null);
 
-  useEffect(() => props.bridge.onEvent((e) => dispatch({ type: "event", e })), [props.bridge]);
+  // -------------------------------------------------------------------------
+  // Auto-scroll: throttled to once every 50 ms. Bursty token streams would
+  // otherwise hammer the measure path inside the WindowedList / live region.
+  // We track `scrollOffset` so manual scroll-up keeps the user where they
+  // are — see also the follow-bottom state below (#8-modul foundation).
+  // -------------------------------------------------------------------------
+
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const [followBottom, setFollowBottom] = useState(true);
+
+  // Real content height reported by the WindowedList. Used by the scroll thumb
+  // so its proportional geometry reflects the actual transcript height
+  // instead of the viewport estimate. Named distinctly from the derived
+  // `contentHeight` below (the viewport budget) to avoid shadowing.
+  const [transcriptContentHeight, setTranscriptContentHeight] = useState(0);
+
+  const autoScrollPendingRef = useRef(false);
+  useEffect(() => {
+    if (!followBottom) return;
+    const ref = scrollRef.current;
+    if (!ref) return;
+    if (autoScrollPendingRef.current) return;
+    autoScrollPendingRef.current = true;
+    const handle = setTimeout(() => {
+      autoScrollPendingRef.current = false;
+      ref.scrollToBottom();
+      // After auto-scroll, the ref is at the bottom; reflect it in state.
+      setScrollOffset(ref.getScrollOffset());
+    }, 50);
+    return () => clearTimeout(handle);
+  }, [transcript.items.length, live.assistant, live.tools.length, followBottom]);
+
+  // -------------------------------------------------------------------------
+  // Re-measure on terminal resize. Ink 7's useStdout exposes the same stdout
+  // we listen on directly; the original duplicate `process.stdout` listener
+  // is no longer needed.
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!stdout) return;
+    const onResize = (): void => {
+      scrollRef.current?.remeasure();
+    };
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
+  // -------------------------------------------------------------------------
+  // Bridge subscription. Events are dispatched into the single slice reducer.
+  // The selector is set imperatively because its `resolve` callback must come
+  // from the imperative side, not from React state. Returning the unsubscribe
+  // function from this effect so React actually cleans up the listener.
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    return props.bridge.onEvent((e) => {
+      dispatchSlice({ type: "event", e });
+      if (e.t === "select") setSelector({ spec: e.spec, resolve: e.resolve });
+    });
+  }, [props.bridge]);
 
   // Reset the highlight to the first option whenever a new selector appears.
   useEffect(() => {
-    if (state.selector) setSelIndex(0);
-  }, [state.selector]);
+    if (selector) setUi((s) => ({ ...s, selIndex: 0 }));
+  }, [selector]);
 
-  // A turn ending (naturally or via stop) clears the "already asked to stop"
-  // guard so the next turn's first Ctrl-C is a plain stop request again.
   useEffect(() => {
-    if (!state.busy) stopRequestedRef.current = false;
-  }, [state.busy]);
+    if (!live.busy) stopRequestedRef.current = false;
+  }, [live.busy]);
 
-  const suggestions = input !== dismissedFor ? filterCommands(input) : [];
-  const acVisible = !state.selector && !state.busy && suggestions.length > 0;
+  // -------------------------------------------------------------------------
+  // Derived render-time values
+  // -------------------------------------------------------------------------
+
+  const suggestions = ui.input !== ui.dismissedFor ? filterCommands(ui.input) : [];
+  const acVisible = !selector && !live.busy && suggestions.length > 0;
 
   const requestExit = (): void => {
     if (exitingRef.current) {
@@ -226,232 +235,319 @@ export function App(props: AppProps): React.ReactElement {
   };
 
   const resolveSelector = (index: number | null): void => {
-    const sel = state.selector;
-    if (!sel) return;
-    dispatch({ type: "set-selector", value: null });
-    sel.resolve(index);
+    if (!selector) return;
+    const pending = selector;
+    setSelector(null);
+    pending.resolve(index);
   };
 
   const submit = (raw: string): void => {
     const line = raw.trim();
-    setInput("");
-    setCursor(0);
-    setDismissedFor(null);
+    setUi((s) => resetInput(s));
     if (!line) return;
     if (line === "exit" || line === "quit") {
       requestExit();
       return;
     }
     if (line === "/settings" || line === "/config") {
-      // Settings continues the same session — no summarize prompt.
       props.onSettings();
       exit();
       return;
     }
-    const nextHist = [...localHistory, line];
-    setLocalHistory(nextHist);
-    setHistIdx(nextHist.length);
+    setHistory((h) => [...h, line]);
+    setUi((s) => ({ ...s, histIdx: history.length + 1 }));
     props.onHistoryPush(line);
-    dispatch({ type: "submit-user", text: line });
+    dispatchSlice({ type: "submit-user", text: line });
     void props.onSubmit(line);
   };
 
-  useInput((ch, key) => {
-    // 1. Selector overlay captures all input.
-    if (state.selector) {
-      const spec = state.selector.spec;
-      if (key.ctrl && ch === "c") {
-        resolveSelector(spec.escResolvesTo);
-        requestExit();
-      } else if (key.upArrow) {
-        setSelIndex((i) => (i - 1 + spec.options.length) % spec.options.length);
-      } else if (key.downArrow) {
-        setSelIndex((i) => (i + 1) % spec.options.length);
-      } else if (key.escape) {
-        resolveSelector(spec.escResolvesTo);
-      } else if (key.return) {
-        resolveSelector(selIndex);
-      }
-      return;
-    }
+  // -------------------------------------------------------------------------
+  // Keyboard input — split into pure helpers for readability.
+  // -------------------------------------------------------------------------
 
-    // 2. Ctrl-C: stop the running turn if one is busy, otherwise exit. A
-    // second Ctrl-C after a stop was already requested force-quits, in case
-    // the turn never actually stops (e.g. a provider that ignores abort).
+  type KeyFlags = {
+    ctrl?: boolean;
+    upArrow?: boolean;
+    downArrow?: boolean;
+    leftArrow?: boolean;
+    rightArrow?: boolean;
+    escape?: boolean;
+    return?: boolean;
+    backspace?: boolean;
+    delete?: boolean;
+    pageUp?: boolean;
+    pageDown?: boolean;
+    tab?: boolean;
+    meta?: boolean;
+  };
+
+  const handleCtrlC = (ch: string | undefined, key: KeyFlags): boolean => {
+    if (!(key.ctrl && ch === "c")) return false;
+    if (live.busy) {
+      if (stopRequestedRef.current) requestExit();
+      else {
+        stopRequestedRef.current = true;
+        props.onStop();
+      }
+    } else {
+      requestExit();
+    }
+    return true;
+  };
+
+  const handleSelector = (ch: string | undefined, key: KeyFlags): boolean => {
+    if (!selector) return false;
+    const spec = selector.spec;
     if (key.ctrl && ch === "c") {
-      if (state.busy) {
-        if (stopRequestedRef.current) {
-          requestExit();
-        } else {
+      resolveSelector(spec.escResolvesTo);
+      requestExit();
+      return true;
+    }
+    if (key.upArrow) {
+      setUi((s) => ({
+        ...s,
+        selIndex: (s.selIndex - 1 + spec.options.length) % spec.options.length,
+      }));
+      return true;
+    }
+    if (key.downArrow) {
+      setUi((s) => ({ ...s, selIndex: (s.selIndex + 1) % spec.options.length }));
+      return true;
+    }
+    if (key.escape) {
+      resolveSelector(spec.escResolvesTo);
+      return true;
+    }
+    if (key.return) {
+      resolveSelector(ui.selIndex);
+      return true;
+    }
+    return false;
+  };
+
+  const handleBusy = (ch: string | undefined, key: KeyFlags): boolean => {
+    if (!live.busy) return false;
+    if (key.return) {
+      if (ui.input.trim().toLowerCase() === "/stop") {
+        setUi((s) => resetInput(s));
+        dispatchSlice({ type: "submit-user", text: "/stop" });
+        if (stopRequestedRef.current) requestExit();
+        else {
           stopRequestedRef.current = true;
           props.onStop();
         }
-      } else {
-        requestExit();
       }
-      return;
-    }
-
-    // 3. While a turn runs, basic editing still works (so a message isn't
-    // lost while composing it), but only "/stop" can submit early — it's the
-    // typed equivalent of Ctrl-C above. Any other Enter press is a no-op
-    // until the turn ends, when it can be sent normally. History nav and
-    // autocomplete stay off (acVisible already requires !state.busy).
-    if (state.busy) {
-      if (key.return) {
-        if (input.trim().toLowerCase() === "/stop") {
-          setInput("");
-          setCursor(0);
-          dispatch({ type: "submit-user", text: "/stop" });
-          if (stopRequestedRef.current) {
-            requestExit();
-          } else {
-            stopRequestedRef.current = true;
-            props.onStop();
-          }
-        }
-        return;
-      }
-      if (key.leftArrow) {
-        setCursor((c) => Math.max(0, c - 1));
-        return;
-      }
-      if (key.rightArrow) {
-        setCursor((c) => Math.min(input.length, c + 1));
-        return;
-      }
-      if (key.backspace || key.delete) {
-        if (cursor > 0) {
-          setInput((s) => s.slice(0, cursor - 1) + s.slice(cursor));
-          setCursor((c) => Math.max(0, c - 1));
-        }
-        return;
-      }
-      if (key.tab || key.ctrl || key.meta || !ch) return;
-      setInput((s) => s.slice(0, cursor) + ch + s.slice(cursor));
-      setCursor((c) => c + ch.length);
-      return;
-    }
-
-    // 4. Autocomplete list steals navigation/confirm keys while visible.
-    if (acVisible) {
-      if (key.upArrow) {
-        setAcIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
-        return;
-      }
-      if (key.downArrow) {
-        setAcIndex((i) => (i + 1) % suggestions.length);
-        return;
-      }
-      if (key.tab) {
-        const pick = suggestions[acIndex] ?? suggestions[0]!;
-        setInput(pick.name);
-        setCursor(pick.name.length);
-        setDismissedFor(pick.name);
-        return;
-      }
-      if (key.return) {
-        const pick = suggestions[acIndex] ?? suggestions[0]!;
-        submit(pick.name);
-        return;
-      }
-      if (key.escape) {
-        setDismissedFor(input);
-        return;
-      }
-      // Any other key falls through so typing keeps filtering.
-    }
-
-    // 5. Normal input editing + history.
-    if (key.return) {
-      submit(input);
-      return;
+      return true;
     }
     if (key.leftArrow) {
-      setCursor((c) => Math.max(0, c - 1));
-      return;
+      setUi((s) => moveCursorLeft(s));
+      return true;
     }
     if (key.rightArrow) {
-      setCursor((c) => Math.min(input.length, c + 1));
-      return;
-    }
-    if (key.upArrow) {
-      if (histIdx > 0) {
-        const idx = histIdx - 1;
-        const v = localHistory[idx] ?? "";
-        setHistIdx(idx);
-        setInput(v);
-        setCursor(v.length);
-      }
-      return;
-    }
-    if (key.downArrow) {
-      if (histIdx < localHistory.length) {
-        const idx = histIdx + 1;
-        const v = localHistory[idx] ?? "";
-        setHistIdx(idx);
-        setInput(v);
-        setCursor(v.length);
-      }
-      return;
+      setUi((s) => moveCursorRight(s));
+      return true;
     }
     if (key.backspace || key.delete) {
-      if (cursor > 0) {
-        setInput((s) => s.slice(0, cursor - 1) + s.slice(cursor));
-        setCursor((c) => Math.max(0, c - 1));
-        setAcIndex(0); // editing re-highlights the top autocomplete match
-      }
-      return;
+      setUi((s) => deleteBeforeCursor(s));
+      return true;
     }
-    if (key.tab || key.ctrl || key.meta || !ch) return;
-    setInput((s) => s.slice(0, cursor) + ch + s.slice(cursor));
-    setCursor((c) => c + ch.length);
-    setAcIndex(0); // editing re-highlights the top autocomplete match
+    if (key.tab || key.ctrl || key.meta || !ch) return true;
+    setUi((s) => insertChar(s, ch));
+    return true;
+  };
+
+  const handleAutocomplete = (ch: string | undefined, key: KeyFlags): boolean => {
+    if (!acVisible) return false;
+    if (key.upArrow) {
+      setUi((s) => ({
+        ...s,
+        acIndex: (s.acIndex - 1 + suggestions.length) % suggestions.length,
+      }));
+      return true;
+    }
+    if (key.downArrow) {
+      setUi((s) => ({ ...s, acIndex: (s.acIndex + 1) % suggestions.length }));
+      return true;
+    }
+    if (key.tab) {
+      const pick = suggestions[ui.acIndex] ?? suggestions[0];
+      if (!pick) return true;
+      setUi((s) => ({ ...s, input: pick.name, cursor: pick.name.length, dismissedFor: pick.name }));
+      return true;
+    }
+    if (key.return) {
+      const pick = suggestions[ui.acIndex] ?? suggestions[0];
+      if (!pick) return true;
+      submit(pick.name);
+      return true;
+    }
+    if (key.escape) {
+      setUi((s) => ({ ...s, dismissedFor: s.input }));
+      return true;
+    }
+    return false;
+  };
+
+  const handleIdle = (ch: string | undefined, key: KeyFlags): boolean => {
+    const viewport = Math.max(1, Math.floor((stdout?.rows ?? 24) / 2));
+    if (key.pageUp) {
+      scrollRef.current?.scrollBy(-viewport);
+      setFollowBottom(false);
+      return true;
+    }
+    if (key.pageDown) {
+      scrollRef.current?.scrollBy(viewport);
+      // If we land on (or past) the bottom, re-engage auto-scroll.
+      const ref = scrollRef.current;
+      if (ref && ref.getScrollOffset() >= ref.getBottomOffset() - 1) {
+        setFollowBottom(true);
+      }
+      return true;
+    }
+    if (key.return) {
+      submit(ui.input);
+      return true;
+    }
+    if (key.leftArrow) {
+      setUi((s) => moveCursorLeft(s));
+      return true;
+    }
+    if (key.rightArrow) {
+      setUi((s) => moveCursorRight(s));
+      return true;
+    }
+    if (key.upArrow) {
+      const next = historyPrev(ui, history);
+      if (next) setUi(next);
+      return true;
+    }
+    if (key.downArrow) {
+      const next = historyNext(ui, history);
+      if (next) setUi(next);
+      return true;
+    }
+    if (key.backspace || key.delete) {
+      setUi((s) => deleteBeforeCursor(s));
+      return true;
+    }
+    if (key.tab || key.ctrl || key.meta || !ch) return true;
+    setUi((s) => insertChar(s, ch));
+    return true;
+  };
+
+  useInput((ch, key) => {
+    const k = key as KeyFlags;
+    if (handleCtrlC(ch, k)) return;
+    if (handleSelector(ch, k)) return;
+    if (handleBusy(ch, k)) return;
+    if (handleAutocomplete(ch, k)) return;
+    handleIdle(ch, k);
   });
 
-  type StaticEntry = { id: number; banner: true } | TranscriptItem;
-  // Banner only on the initial screen (first process mount, before any clear).
-  // A `/new` or `/sessions` clear bumps `generation`, remounting <Static> so
-  // the post-clear items actually render — and drops the banner from then on.
-  const showBannerNow = props.showBanner && state.generation === 0;
-  const staticItems: StaticEntry[] = showBannerNow
-    ? [{ id: 0, banner: true }, ...state.items]
-    : state.items;
+  // -------------------------------------------------------------------------
+  // Layout
+  // -------------------------------------------------------------------------
+
+  const screenRows = stdout?.rows ?? 24;
+  const contentHeight = Math.max(6, screenRows - rows.pinned);
+
+  const showBannerNow = props.showBanner && transcript.generation === 0;
+
+  // Windowed items: optional banner (when generation === 0) plus the finalized
+  // transcript. Each entry carries a stable React node + key so the
+  // windowed list can skip re-rendering off-screen rows.
+  const renderedEntries = useMemo<ReadonlyArray<{ key: string; node: React.ReactNode }>>(() => {
+    const entries: { key: string; node: React.ReactNode }[] = [];
+    if (showBannerNow) {
+      entries.push({
+        key: "banner",
+        node: <Banner key="banner" version={props.version} model={props.model} />,
+      });
+    }
+    for (const item of transcript.items) {
+      entries.push({
+        key: `item-${item.id}`,
+        node: <MemoizedItem key={item.id} item={item} />,
+      });
+    }
+    return entries;
+  }, [showBannerNow, props.version, props.model, transcript.items]);
+
+  // Reserve rows for the live region (assistant + tools + spinner) so the
+  // windowed list's viewport math stays accurate even while streaming.
+  const liveRows = live.busy || live.assistant || live.tools.length > 0 ? 6 : 0;
+  const listViewport = Math.max(3, contentHeight - liveRows);
+
+  const itemKeyFn = useMemo(
+    () =>
+      (entry: { key: string; node: React.ReactNode }): string =>
+        entry.key,
+    [],
+  );
+
+  const renderItemFn = useMemo(
+    () =>
+      (entry: { key: string; node: React.ReactNode }): React.ReactNode =>
+        entry.node,
+    [],
+  );
 
   return (
-    <Box flexDirection="column">
-      <Static key={`static-${state.generation}`} items={staticItems}>
-        {(entry) =>
-          "banner" in entry ? (
-            <Banner key="banner" version={props.version} model={props.model} />
-          ) : (
-            <Item key={entry.id} item={entry} />
-          )
-        }
-      </Static>
+    <Box flexDirection="column" height={screenRows} width="100%">
+      {/* ── TOP: pinned title bar ── */}
+      {/*<TitleBar version={props.version} model={props.model} />*/}
 
+      {/* ── MIDDLE: scrollable content viewport (windowed + scrollbar) ── */}
+      <Box flexDirection="row" height={listViewport} overflow="hidden">
+        <Box flexShrink={1} flexGrow={1} overflow="hidden">
+          <WindowedList
+            ref={scrollRef}
+            items={renderedEntries}
+            itemKey={itemKeyFn}
+            renderItem={renderItemFn}
+            viewportHeight={listViewport}
+            estimatedHeight={3}
+            overscan={6}
+            scrollOffset={scrollOffset}
+            onScroll={setScrollOffset}
+            onContentHeightChange={setTranscriptContentHeight}
+          />
+        </Box>
+        <ScrollThumb
+          contentHeight={transcriptContentHeight}
+          viewportHeight={listViewport}
+          scrollOffset={scrollOffset}
+          trackHeight={listViewport}
+        />
+      </Box>
+
+      {/* ── PINNED: live streaming region (always at the bottom) ── */}
       <LiveRegion
-        assistant={state.liveAssistant}
-        tools={state.liveTools}
-        busy={state.busy}
-        busyLabel={state.busyLabel}
+        assistant={live.assistant}
+        tools={live.tools}
+        busy={live.busy}
+        busyLabel={live.busyLabel}
       />
 
-      {state.selector ? (
-        <SelectPrompt spec={state.selector.spec} selectedIndex={selIndex} />
-      ) : state.busy ? null : (
+      {/* ── BOTTOM: selector overlay OR input + hints ── */}
+      {selector ? (
+        <SelectPrompt spec={selector.spec} selectedIndex={ui.selIndex} />
+      ) : (
         <>
-          {acVisible ? <SuggestionList items={suggestions} selectedIndex={acIndex} /> : null}
+          {acVisible ? <SuggestionList items={suggestions} selectedIndex={ui.acIndex} /> : null}
           <InputBar
-            value={input}
-            cursor={cursor}
-            hintRight={props.model}
-            statusLeft={props.statusLeft}
-            statusRight={props.statusRight}
-            disabled={state.busy}
+            value={ui.input}
+            cursor={ui.cursor}
+            model={props.model}
+            mode="Build"
+            disabled={live.busy}
           />
         </>
       )}
+
+      {/* ── PINNED: tip + status bar ── */}
+      <TipBar />
+      <StatusBar left={props.statusLeft} right={props.statusRight} />
     </Box>
   );
 }

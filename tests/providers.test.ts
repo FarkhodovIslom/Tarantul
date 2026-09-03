@@ -8,9 +8,14 @@ import {
   sanitizeEmptyContent,
   sanitizeRequestMessages,
   stripImageContent,
+  toolCallToOpenAI,
   LLMProvider,
 } from "../src/providers/base.js";
 import type { ChatOptions, LLMResponse } from "../src/providers/base.js";
+import { buildAssistantMessage } from "../src/utils/runtime.js";
+import { AgentRunner } from "../src/agent/runner.js";
+import { ToolRegistry } from "../src/agent/tools/registry.js";
+import type { LLMProvider as LLMProviderType } from "../src/providers/base.js";
 
 // ---------------------------------------------------------------------------
 // sanitizeEmptyContent
@@ -30,9 +35,7 @@ describe("sanitizeEmptyContent", () => {
   });
 
   it("replaces empty string with null for assistant with tool_calls", () => {
-    const msgs = [
-      { role: "assistant", content: "", tool_calls: [{ id: "c1" }] },
-    ];
+    const msgs = [{ role: "assistant", content: "", tool_calls: [{ id: "c1" }] }];
     const result = sanitizeEmptyContent(msgs);
     expect(result[0]!["content"]).toBeNull();
   });
@@ -246,9 +249,7 @@ describe("stripImageContent", () => {
     const msgs = [
       {
         role: "user",
-        content: [
-          { type: "image_url", image_url: { url: "data:..." } },
-        ],
+        content: [{ type: "image_url", image_url: { url: "data:..." } }],
       },
     ];
     const result = stripImageContent(msgs);
@@ -326,5 +327,122 @@ describe("LLMProvider.chatWithRetry", () => {
 
     expect(result.finishReason).toBe("stop");
     expect(provider.calls).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toolCallToOpenAI — extra_content round-trip (Gemini thought_signature)
+// ---------------------------------------------------------------------------
+
+describe("toolCallToOpenAI — extra_content round-trip", () => {
+  it("emits extra_content when set on the request", () => {
+    const out = toolCallToOpenAI({
+      id: "call_1",
+      name: "web_search",
+      arguments: { query: "x" },
+      extraContent: { google: { thought_signature: "abc123" } },
+    });
+    expect(out["extra_content"]).toEqual({ google: { thought_signature: "abc123" } });
+    expect((out["function"] as Record<string, unknown>)["name"]).toBe("web_search");
+  });
+
+  it("omits extra_content when not set", () => {
+    const out = toolCallToOpenAI({ id: "call_1", name: "f", arguments: {} });
+    expect("extra_content" in out).toBe(false);
+  });
+
+  it("emits provider_specific_fields and function provider_specific_fields", () => {
+    const out = toolCallToOpenAI({
+      id: "call_1",
+      name: "f",
+      arguments: {},
+      providerSpecificFields: { trace: "x" },
+      functionProviderSpecificFields: { region: "us" },
+    });
+    expect(out["provider_specific_fields"]).toEqual({ trace: "x" });
+    expect((out["function"] as Record<string, unknown>)["provider_specific_fields"]).toEqual({
+      region: "us",
+    });
+  });
+});
+
+describe("Assistant message with thought_signature survives buildAssistantMessage", () => {
+  it("keeps extra_content on the inner tool_calls object", () => {
+    const tc = toolCallToOpenAI({
+      id: "call_1",
+      name: "web_search",
+      arguments: { query: "Rux" },
+      extraContent: { google: { thought_signature: "deadbeef" } },
+    });
+    const msg = buildAssistantMessage(null, { toolCalls: [tc] });
+    const tcs = msg["tool_calls"] as Array<Record<string, unknown>>;
+    expect(tcs[0]!["extra_content"]).toEqual({ google: { thought_signature: "deadbeef" } });
+  });
+});
+
+describe("AgentRunner — thought_signature round-trip via mock provider", () => {
+  it("echoes the tool_call's extra_content back to the second provider call", async () => {
+    const seenToolCalls: Array<unknown> = [];
+    let callCount = 0;
+    class CaptureProvider {
+      readonly generation = { temperature: 0.7, maxTokens: 4096, reasoningEffort: null };
+      getDefaultModel() {
+        return "mock-gemini";
+      }
+      async chat(opts: ChatOptions): Promise<LLMResponse> {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: "call_42",
+                name: "noop",
+                arguments: { x: 1 },
+                extraContent: { google: { thought_signature: "SIG_42" } },
+              },
+            ],
+            finishReason: "tool_calls",
+            usage: {},
+          };
+        }
+        for (const m of opts.messages) {
+          if (m["role"] === "assistant") {
+            const tcs = m["tool_calls"] as Array<Record<string, unknown>> | undefined;
+            if (tcs) seenToolCalls.push(...tcs);
+          }
+        }
+        return { content: "done", toolCalls: [], finishReason: "stop", usage: {} };
+      }
+      chatWithRetry(opts: ChatOptions) {
+        return this.chat(opts);
+      }
+      chatStreamWithRetry(opts: ChatOptions) {
+        return this.chat(opts);
+      }
+    }
+    const { Tool } = await import("../src/agent/tools/base.js");
+    class Noop extends Tool {
+      readonly name = "noop";
+      readonly description = "noop";
+      readonly parameters = { type: "object", properties: { x: { type: "number" } } };
+      async execute() {
+        return "ok";
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new Noop());
+    const runner = new AgentRunner(new CaptureProvider() as unknown as LLMProviderType);
+    await runner.run({
+      initialMessages: [{ role: "user", content: "go" }],
+      tools: registry,
+      model: "mock-gemini",
+      maxIterations: 3,
+      maxToolResultChars: 4000,
+    });
+    expect(seenToolCalls).toHaveLength(1);
+    const tc = seenToolCalls[0] as Record<string, unknown>;
+    expect(tc["id"]).toBe("call_42");
+    expect(tc["extra_content"]).toEqual({ google: { thought_signature: "SIG_42" } });
   });
 });

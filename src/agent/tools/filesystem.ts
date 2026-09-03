@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { resolve, join, relative, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { Tool, type AskPermission } from "./base.js";
@@ -30,10 +23,11 @@ function resolvePath(
     const inPrimary = resolved.startsWith(allowed + "/") || resolved === allowed;
     if (!inPrimary) {
       // Check extra allowed dirs (e.g. builtin skills)
-      const inExtra = extraAllowedDirs?.some((dir) => {
-        const a = resolve(dir);
-        return resolved.startsWith(a + "/") || resolved === a;
-      }) ?? false;
+      const inExtra =
+        extraAllowedDirs?.some((dir) => {
+          const a = resolve(dir);
+          return resolved.startsWith(a + "/") || resolved === a;
+        }) ?? false;
       if (!inExtra) {
         throw new Error(`Path ${path} is outside allowed directory ${allowedDir}`);
       }
@@ -99,7 +93,9 @@ const DEFAULT_LIMIT = 2000;
 
 export class ReadFileTool extends FsTool {
   override readonly name = "read_file";
-  override get readOnly(): boolean { return true; }
+  override get readOnly(): boolean {
+    return true;
+  }
   override readonly description =
     "Read the contents of a file. Returns numbered lines. " +
     "Use offset and limit to paginate through large files.";
@@ -152,7 +148,8 @@ export class ReadFileTool extends FsTool {
       const allLines = text.split("\n");
       const total = allLines.length;
       let effectiveOffset = Math.max(1, offset);
-      if (effectiveOffset > total) return `Error: offset ${offset} is beyond end of file (${total} lines)`;
+      if (effectiveOffset > total)
+        return `Error: offset ${offset} is beyond end of file (${total} lines)`;
 
       const start = effectiveOffset - 1;
       const end = Math.min(start + (limit ?? DEFAULT_LIMIT), total);
@@ -180,7 +177,8 @@ export class ReadFileTool extends FsTool {
       }
       return result;
     } catch (err) {
-      if (err instanceof Error && err.message.includes("outside allowed")) return `Error: ${err.message}`;
+      if (err instanceof Error && err.message.includes("outside allowed"))
+        return `Error: ${err.message}`;
       return `Error reading file: ${err}`;
     }
   }
@@ -192,7 +190,8 @@ export class ReadFileTool extends FsTool {
 
 export class WriteFileTool extends FsTool {
   readonly name = "write_file";
-  readonly description = "Write content to a file at the given path. Creates parent directories if needed.";
+  readonly description =
+    "Write content to a file at the given path. Creates parent directories if needed.";
 
   readonly parameters = {
     type: "object",
@@ -214,7 +213,8 @@ export class WriteFileTool extends FsTool {
       writeFileSync(fp, content, "utf-8");
       return `Successfully wrote ${content.length} bytes to ${fp}`;
     } catch (err) {
-      if (err instanceof Error && err.message.includes("outside allowed")) return `Error: ${err.message}`;
+      if (err instanceof Error && err.message.includes("outside allowed"))
+        return `Error: ${err.message}`;
       return `Error writing file: ${err}`;
     }
   }
@@ -226,7 +226,7 @@ export class WriteFileTool extends FsTool {
 
 function findMatch(content: string, oldText: string): { match: string | null; count: number } {
   if (content.includes(oldText)) {
-    return { match: oldText, count: (content.split(oldText).length - 1) };
+    return { match: oldText, count: content.split(oldText).length - 1 };
   }
 
   const oldLines = oldText.split("\n");
@@ -306,7 +306,8 @@ export class EditFileTool extends FsTool {
       writeFileSync(fp, newContent, "utf-8");
       return `Successfully edited ${fp}`;
     } catch (err) {
-      if (err instanceof Error && err.message.includes("outside allowed")) return `Error: ${err.message}`;
+      if (err instanceof Error && err.message.includes("outside allowed"))
+        return `Error: ${err.message}`;
       return `Error editing file: ${err}`;
     }
   }
@@ -318,14 +319,26 @@ export class EditFileTool extends FsTool {
 
 const DEFAULT_MAX = 200;
 const IGNORE_DIRS = new Set([
-  ".git", "node_modules", "__pycache__", ".venv", "venv",
-  "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
-  ".ruff_cache", ".coverage", "htmlcov",
+  ".git",
+  "node_modules",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "dist",
+  "build",
+  ".tox",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".coverage",
+  "htmlcov",
 ]);
 
 export class ListDirTool extends FsTool {
   override readonly name = "list_dir";
-  override get readOnly(): boolean { return true; }
+  override get readOnly(): boolean {
+    return true;
+  }
   override readonly description =
     "List the contents of a directory. " +
     "Set recursive=true to explore nested structure. " +
@@ -383,7 +396,8 @@ export class ListDirTool extends FsTool {
       }
       return result;
     } catch (err) {
-      if (err instanceof Error && err.message.includes("outside allowed")) return `Error: ${err.message}`;
+      if (err instanceof Error && err.message.includes("outside allowed"))
+        return `Error: ${err.message}`;
       return `Error listing directory: ${err}`;
     }
   }
@@ -408,7 +422,11 @@ function collectRecursive(
     if (parts.some((p) => IGNORE_DIRS.has(p))) continue;
     state.total++;
     let isDir = false;
-    try { isDir = statSync(full).isDirectory(); } catch { continue; }
+    try {
+      isDir = statSync(full).isDirectory();
+    } catch {
+      continue;
+    }
     if (items.length < state.cap) items.push(isDir ? `${rel}/` : rel);
     if (isDir) collectRecursive(root, full, items, state);
   }
@@ -430,7 +448,11 @@ function detectImageMime(buf: Buffer): string | null {
     if (buf.slice(0, bytes.length).equals(bytes)) return mime;
   }
   // WebP check (RIFF....WEBP)
-  if (buf.length >= 12 && buf.slice(0, 4).equals(Buffer.from("RIFF")) && buf.slice(8, 12).equals(Buffer.from("WEBP"))) {
+  if (
+    buf.length >= 12 &&
+    buf.slice(0, 4).equals(Buffer.from("RIFF")) &&
+    buf.slice(8, 12).equals(Buffer.from("WEBP"))
+  ) {
     return "image/webp";
   }
   return null;

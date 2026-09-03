@@ -137,7 +137,8 @@ function validateValue(val: unknown, schema: Record<string, unknown>, path: stri
 
   if (t === "object" && typeof val === "object" && val !== null) {
     const obj = val as Record<string, unknown>;
-    const props = (schema["properties"] as Record<string, Record<string, unknown>> | undefined) ?? {};
+    const props =
+      (schema["properties"] as Record<string, Record<string, unknown>> | undefined) ?? {};
     for (const k of (schema["required"] as string[] | undefined) ?? []) {
       if (!(k in obj)) {
         errors.push(`missing required ${path ? `${path}.${k}` : k}`);
@@ -177,13 +178,19 @@ export abstract class Tool {
   abstract readonly parameters: Record<string, unknown>;
 
   /** Whether this tool is side-effect free and safe to parallelize. */
-  get readOnly(): boolean { return false; }
+  get readOnly(): boolean {
+    return false;
+  }
 
   /** Whether this tool can run alongside other concurrency-safe tools. */
-  get concurrencySafe(): boolean { return this.readOnly && !this.exclusive; }
+  get concurrencySafe(): boolean {
+    return this.readOnly && !this.exclusive;
+  }
 
   /** Whether this tool should run alone even if concurrency is enabled. */
-  get exclusive(): boolean { return false; }
+  get exclusive(): boolean {
+    return false;
+  }
 
   /** Execute the tool. Returns a string or list of content blocks. */
   abstract execute(params: Record<string, unknown>): Promise<unknown>;

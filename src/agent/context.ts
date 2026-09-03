@@ -180,9 +180,7 @@ export function resolveLazyImage(block: LazyImageBlock): ResolvedImageBlock | nu
  * Materialize any LazyImageBlocks in a message content list.
  * Returns a new array only if any lazy blocks were present; otherwise same ref.
  */
-export function materializeContent(
-  content: unknown,
-): unknown {
+export function materializeContent(content: unknown): unknown {
   if (!Array.isArray(content)) return content;
   let changed = false;
   const result: unknown[] = [];
@@ -400,7 +398,9 @@ function loadBootstrapFiles(workspace: string): string {
     if (existsSync(p)) {
       try {
         parts.push(`## ${name}\n\n${readFileSync(p, "utf-8")}`);
-      } catch { /* skip unreadable */ }
+      } catch {
+        /* skip unreadable */
+      }
     }
   }
   return parts.join("\n\n");
@@ -408,13 +408,21 @@ function loadBootstrapFiles(workspace: string): string {
 
 function currentTimeStr(timezone?: string | null): string {
   const now = timezone
-    ? new Date().toLocaleString("en-US", { timeZone: timezone, dateStyle: "full", timeStyle: "short" })
+    ? new Date().toLocaleString("en-US", {
+        timeZone: timezone,
+        dateStyle: "full",
+        timeStyle: "short",
+      })
     : new Date().toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
   return now;
 }
 
 function currentMtime(path: string): number {
-  try { return statSync(path).mtimeMs; } catch { return 0; }
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 function simpleHash(s: string): string {
@@ -429,6 +437,7 @@ function detectImageMime(buf: Buffer): string | null {
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
   if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
-  if (buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP") return "image/webp";
+  if (buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP")
+    return "image/webp";
   return null;
 }

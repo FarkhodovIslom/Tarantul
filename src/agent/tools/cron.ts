@@ -215,9 +215,7 @@ export class CronTool extends Tool {
 
   private _removeJob(jobId: string | undefined): string {
     if (!jobId) return "Error: job_id is required for remove";
-    return this.cron.removeJob(jobId)
-      ? `Removed job ${jobId}`
-      : `Error: job ${jobId} not found`;
+    return this.cron.removeJob(jobId) ? `Removed job ${jobId}` : `Error: job ${jobId} not found`;
   }
 }
 

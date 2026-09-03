@@ -1,4 +1,3 @@
-
 import type { InboundMessage, OutboundMessage } from "../bus/events.js";
 import type { Session } from "../session/manager.js";
 

@@ -14,7 +14,10 @@ import { BUILTIN_SKILLS_DIR } from "../src/skills/index.js";
 // ---------------------------------------------------------------------------
 
 function makeTmpDir(): string {
-  const dir = join(tmpdir(), `tarantul-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = join(
+    tmpdir(),
+    `tarantul-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -128,7 +131,11 @@ describe("SkillsLoader — constructor + discovery", () => {
     writeSkill(builtinDir, "my-skill", SIMPLE_SKILL);
     const wsSkillsDir = join(wsDir, "skills");
     mkdirSync(wsSkillsDir, { recursive: true });
-    writeSkill(wsSkillsDir, "my-skill", `---\nname: my-skill\ndescription: Workspace version.\n---\n`);
+    writeSkill(
+      wsSkillsDir,
+      "my-skill",
+      `---\nname: my-skill\ndescription: Workspace version.\n---\n`,
+    );
     const loader = new SkillsLoader(wsDir, builtinDir);
     const skills = loader.listSkills(false);
     expect(skills).toHaveLength(1);
@@ -169,10 +176,18 @@ describe("SkillsLoader — loadSkill", () => {
   });
 
   it("workspace skill overrides builtin", () => {
-    writeSkill(builtinDir, "my-skill", "---\nname: my-skill\ndescription: Builtin version.\n---\n# Builtin");
+    writeSkill(
+      builtinDir,
+      "my-skill",
+      "---\nname: my-skill\ndescription: Builtin version.\n---\n# Builtin",
+    );
     const wsSkillsDir = join(wsDir, "skills");
     mkdirSync(wsSkillsDir, { recursive: true });
-    writeSkill(wsSkillsDir, "my-skill", "---\nname: my-skill\ndescription: Workspace version.\n---\n# Workspace");
+    writeSkill(
+      wsSkillsDir,
+      "my-skill",
+      "---\nname: my-skill\ndescription: Workspace version.\n---\n# Workspace",
+    );
     const loader = new SkillsLoader(wsDir, builtinDir);
     expect(loader.loadSkill("my-skill")).toContain("# Workspace");
   });

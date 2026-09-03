@@ -1,4 +1,3 @@
-
 import type { BaseChannel } from "./base.js";
 import type { MessageBus } from "../bus/queue.js";
 

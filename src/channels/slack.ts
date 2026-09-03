@@ -1,5 +1,9 @@
-
-import { App as BoltApp, LogLevel, type AllMiddlewareArgs, type SlackEventMiddlewareArgs } from "@slack/bolt";
+import {
+  App as BoltApp,
+  LogLevel,
+  type AllMiddlewareArgs,
+  type SlackEventMiddlewareArgs,
+} from "@slack/bolt";
 import { logger } from "../utils/logger.js";
 import { BaseChannel } from "./base.js";
 import type { MessageBus } from "../bus/queue.js";
@@ -132,7 +136,10 @@ export class SlackChannel extends BaseChannel {
     // Block until stopped
     await new Promise<void>((resolve) => {
       const check = setInterval(() => {
-        if (!this._running) { clearInterval(check); resolve(); }
+        if (!this._running) {
+          clearInterval(check);
+          resolve();
+        }
       }, 1000);
     });
   }
@@ -140,7 +147,11 @@ export class SlackChannel extends BaseChannel {
   override async stop(): Promise<void> {
     this._running = false;
     if (this._app) {
-      try { await this._app.stop(); } catch { /* ignore */ }
+      try {
+        await this._app.stop();
+      } catch {
+        /* ignore */
+      }
       this._app = null;
     }
   }
@@ -158,7 +169,7 @@ export class SlackChannel extends BaseChannel {
     const threadTsParam = threadTs && channelType !== "im" ? threadTs : undefined;
 
     try {
-      if (msg.content || !(msg.media?.length)) {
+      if (msg.content || !msg.media?.length) {
         await this._app.client.chat.postMessage({
           channel: msg.chatId,
           text: msg.content ? mdToMrkdwn(msg.content) : " ",
@@ -174,8 +185,9 @@ export class SlackChannel extends BaseChannel {
             filename: mediaPath.split("/").pop() ?? "file",
           };
           if (threadTsParam != null) uploadArgs["thread_ts"] = threadTsParam;
-          await (this._app.client.files as unknown as { uploadV2(args: unknown): Promise<unknown> })
-            .uploadV2(uploadArgs);
+          await (
+            this._app.client.files as unknown as { uploadV2(args: unknown): Promise<unknown> }
+          ).uploadV2(uploadArgs);
         } catch (e) {
           logger.error({ err: e, mediaPath }, "Slack file upload failed");
         }
@@ -198,7 +210,9 @@ export class SlackChannel extends BaseChannel {
   // Event handlers
   // ---------------------------------------------------------------------------
 
-  private async _onAppMention(args: SlackEventMiddlewareArgs<"app_mention"> & AllMiddlewareArgs): Promise<void> {
+  private async _onAppMention(
+    args: SlackEventMiddlewareArgs<"app_mention"> & AllMiddlewareArgs,
+  ): Promise<void> {
     const { event } = args;
     const ev = event as unknown as Record<string, unknown>;
     const senderId = ev["user"] as string | undefined;
@@ -223,7 +237,9 @@ export class SlackChannel extends BaseChannel {
     });
   }
 
-  private async _onMessage(args: SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs): Promise<void> {
+  private async _onMessage(
+    args: SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs,
+  ): Promise<void> {
     const event = args.event as unknown as Record<string, unknown>;
     const senderId = event["user"] as string | undefined;
     const chatId = event["channel"] as string | undefined;
@@ -291,7 +307,10 @@ export class SlackChannel extends BaseChannel {
     return text.replace(new RegExp(`<@${this._botUserId}>\\s*`, "g"), "").trim();
   }
 
-  private async _resolveThreadTs(event: Record<string, unknown>, _chatId: string): Promise<string | undefined> {
+  private async _resolveThreadTs(
+    event: Record<string, unknown>,
+    _chatId: string,
+  ): Promise<string | undefined> {
     let threadTs = event["thread_ts"] as string | undefined;
     if (!threadTs && (this.config["replyInThread"] ?? true)) {
       threadTs = event["ts"] as string | undefined;
@@ -304,16 +323,26 @@ export class SlackChannel extends BaseChannel {
     const emoji = (this.config["reactEmoji"] as string | undefined) ?? "eyes";
     try {
       await this._app.client.reactions.add({ channel: chatId, name: emoji, timestamp: ts });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   private async _updateReaction(chatId: string, ts: string): Promise<void> {
     if (!this._app) return;
     const reactEmoji = (this.config["reactEmoji"] as string | undefined) ?? "eyes";
     const doneEmoji = (this.config["doneEmoji"] as string | undefined) ?? "white_check_mark";
-    try { await this._app.client.reactions.remove({ channel: chatId, name: reactEmoji, timestamp: ts }); } catch { /* ignore */ }
+    try {
+      await this._app.client.reactions.remove({ channel: chatId, name: reactEmoji, timestamp: ts });
+    } catch {
+      /* ignore */
+    }
     if (doneEmoji) {
-      try { await this._app.client.reactions.add({ channel: chatId, name: doneEmoji, timestamp: ts }); } catch { /* ignore */ }
+      try {
+        await this._app.client.reactions.add({ channel: chatId, name: doneEmoji, timestamp: ts });
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

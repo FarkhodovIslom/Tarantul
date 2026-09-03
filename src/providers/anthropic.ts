@@ -22,9 +22,12 @@ function toolResultBlock(msg: Record<string, unknown>): Record<string, unknown> 
   return {
     type: "tool_result",
     tool_use_id: msg["tool_call_id"] ?? "",
-    content: typeof content === "string" || Array.isArray(content)
-      ? content
-      : content != null ? String(content) : "",
+    content:
+      typeof content === "string" || Array.isArray(content)
+        ? content
+        : content != null
+          ? String(content)
+          : "",
   };
 }
 
@@ -34,7 +37,11 @@ function assistantBlocks(msg: Record<string, unknown>): Record<string, unknown>[
 
   for (const tb of (msg["thinking_blocks"] as Record<string, unknown>[] | undefined) ?? []) {
     if (tb["type"] === "thinking") {
-      blocks.push({ type: "thinking", thinking: tb["thinking"] ?? "", signature: tb["signature"] ?? "" });
+      blocks.push({
+        type: "thinking",
+        thinking: tb["thinking"] ?? "",
+        signature: tb["signature"] ?? "",
+      });
     }
   }
 
@@ -42,7 +49,11 @@ function assistantBlocks(msg: Record<string, unknown>): Record<string, unknown>[
     blocks.push({ type: "text", text: content });
   } else if (Array.isArray(content)) {
     for (const item of content) {
-      blocks.push(typeof item === "object" && item !== null ? item as Record<string, unknown> : { type: "text", text: String(item) });
+      blocks.push(
+        typeof item === "object" && item !== null
+          ? (item as Record<string, unknown>)
+          : { type: "text", text: String(item) },
+      );
     }
   }
 
@@ -51,7 +62,11 @@ function assistantBlocks(msg: Record<string, unknown>): Record<string, unknown>[
     const fn = (tc["function"] as Record<string, unknown>) ?? {};
     let args = fn["arguments"] ?? "{}";
     if (typeof args === "string") {
-      try { args = JSON.parse(args); } catch { args = {}; }
+      try {
+        args = JSON.parse(args);
+      } catch {
+        args = {};
+      }
     }
     blocks.push({
       type: "tool_use",
@@ -86,7 +101,8 @@ function convertUserContent(content: unknown): unknown {
 }
 
 function convertImageBlock(block: Record<string, unknown>): Record<string, unknown> | null {
-  const url = ((block["image_url"] as Record<string, unknown> | undefined)?.["url"] as string) ?? "";
+  const url =
+    ((block["image_url"] as Record<string, unknown> | undefined)?.["url"] as string) ?? "";
   if (!url) return null;
   const m = url.match(/^data:(image\/\w+);base64,(.+)$/s);
   if (m) {
@@ -117,9 +133,10 @@ function mergeConsecutive(msgs: AnthropicMessage[]): AnthropicMessage[] {
   return merged;
 }
 
-function convertMessages(
-  messages: Record<string, unknown>[],
-): { system: string | Record<string, unknown>[]; msgs: AnthropicMessage[] } {
+function convertMessages(messages: Record<string, unknown>[]): {
+  system: string | Record<string, unknown>[];
+  msgs: AnthropicMessage[];
+} {
   let system: string | Record<string, unknown>[] = "";
   const raw: AnthropicMessage[] = [];
 
@@ -128,9 +145,10 @@ function convertMessages(
     const content = msg["content"];
 
     if (role === "system") {
-      system = (typeof content === "string" || Array.isArray(content))
-        ? (content as string | Record<string, unknown>[])
-        : String(content ?? "");
+      system =
+        typeof content === "string" || Array.isArray(content)
+          ? (content as string | Record<string, unknown>[])
+          : String(content ?? "");
       continue;
     }
 
@@ -164,7 +182,9 @@ function convertMessages(
   return { system, msgs: mergeConsecutive(raw) };
 }
 
-function convertTools(tools: Record<string, unknown>[] | null | undefined): Record<string, unknown>[] | null {
+function convertTools(
+  tools: Record<string, unknown>[] | null | undefined,
+): Record<string, unknown>[] | null {
   if (!tools || tools.length === 0) return null;
   return tools.map((tool) => {
     const fn = (tool["function"] as Record<string, unknown> | undefined) ?? tool;
@@ -255,9 +275,10 @@ function parseResponse(response: Anthropic.Message): LLMResponse {
       toolCalls.push({
         id: block["id"] as string,
         name: block["name"] as string,
-        arguments: typeof block["input"] === "object" && block["input"] !== null
-          ? block["input"] as Record<string, unknown>
-          : {},
+        arguments:
+          typeof block["input"] === "object" && block["input"] !== null
+            ? (block["input"] as Record<string, unknown>)
+            : {},
       });
     } else if (block["type"] === "thinking") {
       thinkingBlocks.push({
@@ -311,12 +332,14 @@ export class AnthropicProvider extends LLMProvider {
   private readonly defaultModel: string;
   private readonly extraHeaders: Record<string, string>;
 
-  constructor(opts: {
-    apiKey?: string | null;
-    apiBase?: string | null;
-    defaultModel?: string;
-    extraHeaders?: Record<string, string> | null;
-  } = {}) {
+  constructor(
+    opts: {
+      apiKey?: string | null;
+      apiBase?: string | null;
+      defaultModel?: string;
+      extraHeaders?: Record<string, string> | null;
+    } = {},
+  ) {
     super(opts.apiKey, opts.apiBase);
     this.defaultModel = opts.defaultModel ?? "claude-sonnet-4-20250514";
     this.extraHeaders = opts.extraHeaders ?? {};
@@ -359,7 +382,11 @@ export class AnthropicProvider extends LLMProvider {
 
     if (thinkingEnabled) {
       const effort = (opts.reasoningEffort ?? "medium").toLowerCase();
-      const budgetMap: Record<string, number> = { low: 1024, medium: 4096, high: Math.max(8192, maxTokens) };
+      const budgetMap: Record<string, number> = {
+        low: 1024,
+        medium: 4096,
+        high: Math.max(8192, maxTokens),
+      };
       const budget = budgetMap[effort] ?? 4096;
       kwargs["thinking"] = { type: "enabled", budget_tokens: budget };
       kwargs["max_tokens"] = Math.max(maxTokens, budget + 4096);
@@ -393,7 +420,12 @@ export class AnthropicProvider extends LLMProvider {
       if (opts.signal?.aborted) {
         return { content: null, toolCalls: [], finishReason: "cancelled", usage: {} };
       }
-      return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
+      return {
+        content: `Error calling LLM: ${err}`,
+        toolCalls: [],
+        finishReason: "error",
+        usage: {},
+      };
     }
   }
 
@@ -442,17 +474,31 @@ export class AnthropicProvider extends LLMProvider {
       // the catch block, and skip finalMessage() (which needs the completed
       // stream state abort just tore down).
       if (opts.signal?.aborted) {
-        return { content: accumulated || null, toolCalls: [], finishReason: "cancelled", usage: {} };
+        return {
+          content: accumulated || null,
+          toolCalls: [],
+          finishReason: "cancelled",
+          usage: {},
+        };
       }
 
       const response = await stream.finalMessage();
       return parseResponse(response);
     } catch (err) {
       if (opts.signal?.aborted) {
-        return { content: accumulated || null, toolCalls: [], finishReason: "cancelled", usage: {} };
+        return {
+          content: accumulated || null,
+          toolCalls: [],
+          finishReason: "cancelled",
+          usage: {},
+        };
       }
       const msg = String(err);
-      if (msg.includes("stalled") || msg.includes("timeout") || msg.includes("Request was aborted")) {
+      if (
+        msg.includes("stalled") ||
+        msg.includes("timeout") ||
+        msg.includes("Request was aborted")
+      ) {
         return {
           content: `Error calling LLM: stream stalled for more than ${IDLE_TIMEOUT_MS / 1000} seconds`,
           toolCalls: [],
@@ -460,7 +506,12 @@ export class AnthropicProvider extends LLMProvider {
           usage: {},
         };
       }
-      return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
+      return {
+        content: `Error calling LLM: ${err}`,
+        toolCalls: [],
+        finishReason: "error",
+        usage: {},
+      };
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
     }

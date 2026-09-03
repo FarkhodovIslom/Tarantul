@@ -25,7 +25,9 @@ export interface SessionUsageTotals {
 }
 
 function isSessionUsageTotals(v: unknown): v is SessionUsageTotals {
-  return typeof v === "object" && v !== null && typeof (v as SessionUsageTotals).callCount === "number";
+  return (
+    typeof v === "object" && v !== null && typeof (v as SessionUsageTotals).callCount === "number"
+  );
 }
 
 export function getSessionUsage(session: Session): SessionUsageTotals | null {

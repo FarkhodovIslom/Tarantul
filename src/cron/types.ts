@@ -84,7 +84,9 @@ export function computeNextRun(schedule: CronSchedule, fromMs: number): number |
       if (!schedule.expr) return null;
       try {
         const { Cron } = require("croner") as typeof import("croner");
-        const cronOpts = schedule.tz ? { timezone: schedule.tz, paused: true as const } : { paused: true as const };
+        const cronOpts = schedule.tz
+          ? { timezone: schedule.tz, paused: true as const }
+          : { paused: true as const };
         const job = new Cron(schedule.expr, cronOpts);
         const next = job.nextRun(new Date(fromMs));
         return next ? next.getTime() : null;

@@ -1,4 +1,3 @@
-
 import type { Config } from "../config/schema.js";
 import { getApiBase, getApiKey, getProviderName } from "../config/schema.js";
 import type { LLMProvider } from "./base.js";
@@ -12,14 +11,22 @@ export function createProvider(config: Config, model?: string): LLMProvider {
   const apiBase = getApiBase(config, model);
   const spec = providerName ? findByName(providerName) : null;
 
-  const providers = config.providers as Record<string, { apiKey?: string; extraHeaders?: Record<string, string> | null }>;
+  const providers = config.providers as Record<
+    string,
+    { apiKey?: string; extraHeaders?: Record<string, string> | null }
+  >;
   const providerCfg = providerName ? providers[providerName] : null;
   const extraHeaders = providerCfg?.extraHeaders ?? null;
 
   const effectiveModel = model ?? config.agents.defaults.model;
 
   if (!spec) {
-    return new OpenAICompatProvider({ apiKey, apiBase, defaultModel: effectiveModel, extraHeaders: extraHeaders ?? null });
+    return new OpenAICompatProvider({
+      apiKey,
+      apiBase,
+      defaultModel: effectiveModel,
+      extraHeaders: extraHeaders ?? null,
+    });
   }
 
   switch (spec.backend) {

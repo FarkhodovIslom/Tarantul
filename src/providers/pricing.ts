@@ -87,7 +87,8 @@ export function estimateCostUsd(
 
   const uncachedPrompt = Math.max(0, tokens.promptTokens - tokens.cachedTokens);
   const promptCost = (uncachedPrompt / 1_000_000) * pricing.inputPerM;
-  const cachedCost = (tokens.cachedTokens / 1_000_000) * (pricing.cachedInputPerM ?? pricing.inputPerM);
+  const cachedCost =
+    (tokens.cachedTokens / 1_000_000) * (pricing.cachedInputPerM ?? pricing.inputPerM);
   const completionCost = (tokens.completionTokens / 1_000_000) * pricing.outputPerM;
   return promptCost + cachedCost + completionCost;
 }

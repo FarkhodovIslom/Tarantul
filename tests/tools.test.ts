@@ -1,6 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import { ToolRegistry } from "../src/agent/tools/registry";
-import { ReadFileTool, WriteFileTool, EditFileTool, ListDirTool } from "../src/agent/tools/filesystem";
+import {
+  ReadFileTool,
+  WriteFileTool,
+  EditFileTool,
+  ListDirTool,
+} from "../src/agent/tools/filesystem";
 import { ExecTool } from "../src/agent/tools/shell";
 import { Tool } from "../src/agent/tools/base.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -243,7 +248,9 @@ class TestTool extends Tool {
     },
     required: ["count", "name"],
   };
-  async execute(_p: Record<string, unknown>): Promise<unknown> { return "ok"; }
+  async execute(_p: Record<string, unknown>): Promise<unknown> {
+    return "ok";
+  }
 }
 
 describe("Tool.castParams", () => {

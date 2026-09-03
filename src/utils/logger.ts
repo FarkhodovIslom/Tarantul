@@ -1,4 +1,3 @@
-
 import pino, { type LoggerOptions } from "pino";
 
 const opts: LoggerOptions = {

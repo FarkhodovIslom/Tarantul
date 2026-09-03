@@ -122,14 +122,19 @@ class SearxngProvider implements SearchProvider {
 
   async search(query: string, count: number, signal: AbortSignal): Promise<SearchResult[]> {
     if (!this.baseUrl) {
-      throw new Error("searxng requires a base URL (set tools.web.search.baseUrl to your instance)");
+      throw new Error(
+        "searxng requires a base URL (set tools.web.search.baseUrl to your instance)",
+      );
     }
     const url = new URL("/search", this.baseUrl);
     url.searchParams.set("q", query);
     url.searchParams.set("format", "json");
     const res = await fetch(
       url.toString(),
-      withProxy({ signal, headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }, this.proxy),
+      withProxy(
+        { signal, headers: { "User-Agent": USER_AGENT, Accept: "application/json" } },
+        this.proxy,
+      ),
     );
     if (!res.ok) throw new Error(`searxng HTTP ${res.status} ${res.statusText}`);
     return parseSearxng(await res.json()).slice(0, count);

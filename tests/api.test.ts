@@ -97,10 +97,7 @@ afterAll(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function startServer(
-  runner: AgentRunner,
-  opts: Partial<ApiServerOpts> = {},
-): ApiServer {
+function startServer(runner: AgentRunner, opts: Partial<ApiServerOpts> = {}): ApiServer {
   const sessions = new SessionManager(tmpDir);
   const s = new ApiServer(
     { ...DEFAULT_OPTS, ...opts },
@@ -124,7 +121,7 @@ describe("GET /health", () => {
 
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
-    const body = await res.json() as Record<string, string>;
+    const body = (await res.json()) as Record<string, string>;
     expect(body["status"]).toBe("ok");
   });
 });
@@ -140,7 +137,7 @@ describe("GET /v1/models", () => {
 
     const res = await fetch(`${baseUrl}/v1/models`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { object: string; data: { id: string }[] };
+    const body = (await res.json()) as { object: string; data: { id: string }[] };
     expect(body.object).toBe("list");
     expect(body.data.length).toBe(1);
     expect(body.data[0]!.id).toBe("tarantul");
@@ -165,7 +162,7 @@ describe("POST /v1/chat/completions", () => {
       }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       object: string;
       model: string;
       choices: { message: { role: string; content: string } }[];
@@ -219,9 +216,7 @@ describe("POST /v1/chat/completions", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        messages: [
-          { role: "user", content: [{ type: "text", text: "hello from parts" }] },
-        ],
+        messages: [{ role: "user", content: [{ type: "text", text: "hello from parts" }] }],
       }),
     });
     expect(res.status).toBe(200);
@@ -258,7 +253,7 @@ describe("POST /v1/chat/completions — validation errors", () => {
       body: "not json",
     });
     expect(res.status).toBe(400);
-    const body = await res.json() as { error: { code: number } };
+    const body = (await res.json()) as { error: { code: number } };
     expect(body.error.code).toBe(400);
   });
 
@@ -359,7 +354,7 @@ describe("API key authentication", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer wrong",
+        Authorization: "Bearer wrong",
       },
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
@@ -374,7 +369,7 @@ describe("API key authentication", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer secret",
+        Authorization: "Bearer secret",
       },
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
@@ -409,7 +404,7 @@ describe("Error and fallback paths", () => {
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: { type: string } };
+    const body = (await res.json()) as { error: { type: string } };
     expect(body.error.type).toBe("server_error");
   });
 
@@ -423,7 +418,7 @@ describe("Error and fallback paths", () => {
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { choices: { message: { content: string } }[] };
+    const body = (await res.json()) as { choices: { message: { content: string } }[] };
     // Should have used EMPTY_FINAL_RESPONSE_MESSAGE fallback
     expect(body.choices[0]!.message.content).toBeTruthy();
   });
@@ -602,4 +597,3 @@ describe("Permissions endpoints", () => {
     expect(res.status).toBe(404);
   });
 });
-

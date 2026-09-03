@@ -78,7 +78,9 @@ export class CompositeHook extends AgentHook {
 
   override async beforeIteration(ctx: AgentHookContext): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.beforeIteration(ctx); } catch (e) {
+      try {
+        await h.beforeIteration(ctx);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.beforeIteration error");
       }
     }
@@ -86,7 +88,9 @@ export class CompositeHook extends AgentHook {
 
   override async onStream(ctx: AgentHookContext, delta: string): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.onStream(ctx, delta); } catch (e) {
+      try {
+        await h.onStream(ctx, delta);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.onStream error");
       }
     }
@@ -94,7 +98,9 @@ export class CompositeHook extends AgentHook {
 
   override async onStreamEnd(ctx: AgentHookContext, opts: { resuming: boolean }): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.onStreamEnd(ctx, opts); } catch (e) {
+      try {
+        await h.onStreamEnd(ctx, opts);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.onStreamEnd error");
       }
     }
@@ -102,7 +108,9 @@ export class CompositeHook extends AgentHook {
 
   override async beforeExecuteTools(ctx: AgentHookContext): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.beforeExecuteTools(ctx); } catch (e) {
+      try {
+        await h.beforeExecuteTools(ctx);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.beforeExecuteTools error");
       }
     }
@@ -110,15 +118,23 @@ export class CompositeHook extends AgentHook {
 
   override async onToolStart(ctx: AgentHookContext, tc: ToolCallRequest): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.onToolStart(ctx, tc); } catch (e) {
+      try {
+        await h.onToolStart(ctx, tc);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.onToolStart error");
       }
     }
   }
 
-  override async onToolEnd(ctx: AgentHookContext, tc: ToolCallRequest, event: ToolEvent): Promise<void> {
+  override async onToolEnd(
+    ctx: AgentHookContext,
+    tc: ToolCallRequest,
+    event: ToolEvent,
+  ): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.onToolEnd(ctx, tc, event); } catch (e) {
+      try {
+        await h.onToolEnd(ctx, tc, event);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.onToolEnd error");
       }
     }
@@ -126,13 +142,18 @@ export class CompositeHook extends AgentHook {
 
   override async afterIteration(ctx: AgentHookContext): Promise<void> {
     for (const h of this.hooks) {
-      try { await h.afterIteration(ctx); } catch (e) {
+      try {
+        await h.afterIteration(ctx);
+      } catch (e) {
         logger.error({ err: e, hook: h.constructor.name }, "AgentHook.afterIteration error");
       }
     }
   }
 
-  override finalizeContent(ctx: AgentHookContext, content: string | null | undefined): string | null {
+  override finalizeContent(
+    ctx: AgentHookContext,
+    content: string | null | undefined,
+  ): string | null {
     let c = content ?? null;
     for (const h of this.hooks) {
       c = h.finalizeContent(ctx, c);

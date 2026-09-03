@@ -1,82 +1,53 @@
 import { Box, Text } from "ink";
+import { memo, useEffect, useState } from "react";
 import type React from "react";
-import { useEffect, useState } from "react";
 import { markdownToAnsi, toolCallLabel } from "../render.js";
-import { SLASH_COMMANDS, type SlashCommand } from "./commands.js";
-import { tiffany } from "./theme.js";
+import type { SlashCommand } from "./commands.js";
+import { LOGO_COLORS, LOGO_LINES } from "./logo.js";
+import { layout, tiffany, tokens } from "./theme.js";
 import type { RunningTool, SelectorSpec, TranscriptItem } from "./types.js";
 
 /**
  * OpenCode-style spatial layout powered by Tiffany theme tokens.
- * High negative space, crisp hierarchy, clean text markers.
+ * High negative space, crisp hierarchy, gradient logo, native-app feel.
+ *
+ * All components are wrapped in `React.memo` so an input keystroke or a single
+ * streaming delta does not re-evaluate the whole transcript.
  */
 
-const BLOCK_LOGO: readonly string[] = [
-  `█████████████████████████████████████████████████`,
-  `█               T A R A N T U L                 █`,
-  `█████████████████████████████████████████████████`,
-];
+// ---------------------------------------------------------------------------
+// Banner — gradient ASCII art logo shown once on startup
+// ---------------------------------------------------------------------------
 
-export function Banner({ version, model }: { version: string; model: string }): React.ReactElement {
+export const Banner = memo(function Banner({
+  version,
+  model,
+}: {
+  version: string;
+  model: string;
+}): React.ReactElement {
   return (
-    <Box flexDirection="column" alignItems="center" paddingY={2} width="100%">
-      {BLOCK_LOGO.map((line, i) => (
-        <Text key={`logo-line-${i}`} color={tiffany.primary}>
+    <Box flexDirection="column" alignItems="center" paddingY={3} width="100%">
+      {LOGO_LINES.map((line, i) => (
+        <Text key={`logo-${i}`} color={LOGO_COLORS[i] ?? tiffany.primary}>
           {line}
         </Text>
       ))}
-      <Box marginTop={1}>
+      <Box marginTop={2} gap={1}>
         <Text bold color={tiffany.secondary}>{`v${version}`}</Text>
-        <Text color={tiffany.comment}>{` · ${model}`}</Text>
-      </Box>
-
-      <Box marginTop={2} flexDirection="column" width={48}>
-        {SLASH_COMMANDS.map((c) => (
-          <Box key={c.name} justifyContent="space-between" width="100%">
-            <Text color={tiffany.primary}>{c.name}</Text>
-            <Text color={tiffany.comment}>{c.description}</Text>
-          </Box>
-        ))}
-        <Box justifyContent="space-between" width="100%">
-          <Text color={tiffany.primary}>exit</Text>
-          <Text color={tiffany.comment}>quit application</Text>
-        </Box>
+        <Text color={tiffany.comment}>{"·"}</Text>
+        <Text color={tiffany.comment}>{model}</Text>
       </Box>
     </Box>
   );
-}
+});
 
-/**
- * Top-bordered block for messages/assistant output.
- * Clean tiling window manager layout with Tiffany accents.
- */
-/**
- * Content block for messages/assistant output.
- * Clean layout with Tiffany accents.
- */
-function WindowBlock({
-  children,
-  header,
-}: {
-  children: React.ReactNode;
-  header?: React.ReactNode;
-}): React.ReactElement {
-  return (
-    <Box
-      flexDirection="column"
-      width="100%"
-      paddingY={1}
-      paddingX={2}
-      marginBottom={1}
-    >
-      {header ? <Box marginBottom={1}>{header}</Box> : null}
-      <Box flexDirection="column">{children}</Box>
-    </Box>
-  );
-}
+// ---------------------------------------------------------------------------
+// Transcript items
+// ---------------------------------------------------------------------------
 
 /** A completed tool line with simple ASCII status markers. */
-export function ToolLine({
+const ToolLineInner = ({
   label,
   ok,
   detail,
@@ -84,22 +55,40 @@ export function ToolLine({
   label: string;
   ok: boolean;
   detail: string;
-}): React.ReactElement {
+}): React.ReactElement => {
   const summary = (detail.split("\n")[0] ?? "").trim();
   const capped = summary.length > 100 ? `${summary.slice(0, 99)}…` : summary;
   return (
     <Box flexDirection="column" paddingX={2} marginBottom={1}>
       <Text>
         <Text color={ok ? tiffany.green : tiffany.red}>{ok ? "[✓] " : "[×] "}</Text>
-        <Text bold color={tiffany.fg}>{label}</Text>
+        <Text bold color={tiffany.fg}>
+          {label}
+        </Text>
       </Text>
       {capped ? <Text color={tiffany.comment}>{`  └─ ${capped}`}</Text> : null}
     </Box>
   );
-}
+};
+
+export const ToolLine = memo(
+  ToolLineInner,
+  (prev, next) => prev.label === next.label && prev.ok === next.ok && prev.detail === next.detail,
+);
 
 /** Render one finalized transcript item. */
-export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
+const ItemInner = ({
+  item,
+  renderedText,
+}: {
+  item: TranscriptItem;
+  /**
+   * When the caller (MemoizedItem) already cached the markdown-to-ANSI render,
+   * it passes the rendered string here to skip a redundant pass. When
+   * undefined, Item falls back to rendering `item.text` inline.
+   */
+  renderedText?: string;
+}): React.ReactElement => {
   switch (item.kind) {
     case "user":
       return (
@@ -108,40 +97,73 @@ export function Item({ item }: { item: TranscriptItem }): React.ReactElement {
             <Text color={tiffany.selection}>{"─".repeat(48)}</Text>
           </Box>
           <Box gap={1}>
-            <Text color={tiffany.primary} bold>{"⬩➤ "}</Text>
+            <Text color={tiffany.primary} bold>
+              {"⬩➤ "}
+            </Text>
             <Text color={tiffany.fg}>{item.text}</Text>
           </Box>
         </Box>
       );
-    case "assistant":
+    case "assistant": {
+      // Prefer the cached render; only fall back to a fresh markdown pass when
+      // the caller didn't supply one (e.g. the memo wrapper is bypassed).
+      const rendered = renderedText ?? markdownToAnsi(item.text);
       return (
-        <WindowBlock
-          header={
-            <Box gap={1}>
-              <Text color={tiffany.secondary} bold>{"✦ Assistant"}</Text>
-              {item.model ? (
-                <Text color={tiffany.comment}>{`(${item.model} · ${item.time})`}</Text>
-              ) : null}
-            </Box>
-          }
-        >
-          <Text color={tiffany.fg}>{markdownToAnsi(item.text)}</Text>
-        </WindowBlock>
+        <Box flexDirection="column" width="100%" paddingX={2} marginBottom={1}>
+          <Box gap={1} marginBottom={1}>
+            <Text color={tiffany.secondary} bold>
+              {"✦ Assistant"}
+            </Text>
+            {item.model ? (
+              <Text color={tiffany.comment}>{`(${item.model} · ${item.time})`}</Text>
+            ) : null}
+          </Box>
+          <Text color={tiffany.fg}>{rendered}</Text>
+        </Box>
       );
+    }
     case "tool":
       return <ToolLine label={item.label} ok={item.ok} detail={item.detail} />;
     case "notice":
       return (
         <Box paddingX={2} marginBottom={1}>
-          <Text color={item.tone === "error" ? tiffany.red : tiffany.comment}>{`! ${item.text}`}</Text>
+          <Text color={item.tone === "error" ? tiffany.red : tiffany.comment}>
+            {`! ${item.text}`}
+          </Text>
         </Box>
       );
   }
-}
+};
+
+export const Item = memo(
+  ItemInner,
+  (prev, next) => prev.item === next.item && prev.renderedText === next.renderedText,
+);
+
+// ---------------------------------------------------------------------------
+// Live region — streaming assistant text + running tools + spinner
+// ---------------------------------------------------------------------------
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-export function Spinner({ label }: { label: string }): React.ReactElement {
+/**
+ * Tail-clamp streamed assistant text to the last N lines with a `… ` prefix
+ * when truncation occurred. The full text still lands in the transcript via
+ * `assistant-end`; this clamp only protects the live preview from pushing the
+ * bottom-pinned zones off-screen during long replies.
+ */
+export function tailClampAssistant(text: string, maxLines: number): {
+  text: string;
+  truncated: boolean;
+} {
+  if (!text) return { text, truncated: false };
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return { text, truncated: false };
+  const kept = lines.slice(-maxLines).join("\n");
+  return { text: `…\n${kept}`, truncated: true };
+}
+
+const SpinnerInner = ({ label }: { label: string }): React.ReactElement => {
   const [frame, setFrame] = useState(0);
   const [start] = useState(() => Date.now());
   const [secs, setSecs] = useState(0);
@@ -157,15 +179,24 @@ export function Spinner({ label }: { label: string }): React.ReactElement {
   return (
     <Box paddingX={2} paddingY={1} justifyContent="space-between" width="100%">
       <Box gap={1}>
-        <Text color={tiffany.secondary} bold>{SPINNER_FRAMES[frame]}</Text>
+        <Text color={tiffany.secondary} bold>
+          {SPINNER_FRAMES[frame]}
+        </Text>
         <Text color={tiffany.comment}>{`${label} (${secs}s)`}</Text>
       </Box>
       <Text color={tiffany.comment}>ctrl+c to cancel</Text>
     </Box>
   );
-}
+};
 
-export function LiveRegion({
+// Spinner has its own 80 ms tick — memozing the export means only the Spinner
+// subtree re-renders on tick; parent LiveRegion does not re-render.
+export const Spinner = memo(SpinnerInner);
+
+/** Max lines of streamed text shown in the live preview before clamping. */
+const LIVE_ASSISTANT_MAX_LINES = 3;
+
+const LiveRegionInner = ({
   assistant,
   tools,
   busy,
@@ -175,129 +206,208 @@ export function LiveRegion({
   tools: RunningTool[];
   busy: boolean;
   busyLabel: string | null;
-}): React.ReactElement | null {
+}): React.ReactElement | null => {
   if (!busy && !assistant && tools.length === 0) return null;
+  const { text: visibleAssistant } = tailClampAssistant(assistant, LIVE_ASSISTANT_MAX_LINES);
   return (
     <Box flexDirection="column" width="100%">
       {tools.map((t) => (
         <Box key={t.id} paddingX={2} gap={1}>
-          <Text color={tiffany.secondary}>⚙️</Text>
-          <Text bold color={tiffany.fg}>{t.label}</Text>
+          <Text color={tiffany.secondary}>{"⚙"}</Text>
+          <Text bold color={tiffany.fg}>
+            {t.label}
+          </Text>
         </Box>
       ))}
       {assistant ? (
-        <WindowBlock header={<Text color={tiffany.secondary} bold>{"✦ Assistant"}</Text>}>
-          <Text color={tiffany.fg}>{markdownToAnsi(assistant)}</Text>
-        </WindowBlock>
+        <Box flexDirection="column" width="100%" paddingX={2} marginBottom={1}>
+          <Box gap={1} marginBottom={1}>
+            <Text color={tiffany.secondary} bold>
+              {"✦ Assistant"}
+            </Text>
+          </Box>
+          <Text color={tiffany.fg}>{markdownToAnsi(visibleAssistant)}</Text>
+        </Box>
       ) : null}
       {busy ? (
         <Spinner
-          label={busyLabel ?? (assistant ? "Writing…" : tools.length > 0 ? "Working…" : "Thinking…")}
+          label={
+            busyLabel ?? (assistant ? "Writing…" : tools.length > 0 ? "Working…" : "Thinking…")
+          }
         />
       ) : null}
     </Box>
   );
-}
+};
 
-/**
- * Native application style input container with Tiffany background block,
- * breathable vertical padding, and discrete status rows.
- */
-export function InputBar({
+export const LiveRegion = memo(
+  LiveRegionInner,
+  (prev, next) =>
+    prev.assistant === next.assistant &&
+    prev.busy === next.busy &&
+    prev.busyLabel === next.busyLabel &&
+    prev.tools === next.tools,
+);
+
+// ---------------------------------------------------------------------------
+// InputBar — OpenCode-style bordered input box with model badge
+// ---------------------------------------------------------------------------
+
+const InputBarInner = ({
   value,
   cursor,
-  hintRight,
-  statusLeft,
-  statusRight,
+  model,
+  mode: _mode,
   disabled,
 }: {
   value: string;
   cursor: number;
-  hintRight: string;
-  statusLeft: string;
-  statusRight: string;
+  model: string;
+  mode: string;
   disabled: boolean;
-}): React.ReactElement {
+}): React.ReactElement => {
   const before = value.slice(0, cursor);
   const at = value.slice(cursor, cursor + 1) || " ";
   const after = value.slice(cursor + 1);
 
+  const showPlaceholder = value.length === 0;
+  const borderTokens = disabled ? tokens.borders.inputIdle : tokens.borders.inputActive;
+
   return (
-    <Box flexDirection="column" width="100%" paddingX={2} marginTop={1} marginBottom={1}>
+    <Box flexDirection="column" width="100%" paddingX={2} marginTop={1}>
+      {/* Clean input card container */}
       <Box
-        backgroundColor={disabled ? tiffany.bg : tiffany.selection}
+        {...borderTokens}
+        backgroundColor={layout.inputBox.bg}
         paddingX={2}
-        paddingY={1}
+        paddingY={0}
         width="100%"
       >
-        <Text color={disabled ? tiffany.comment : tiffany.primary}>{"⬩➤ "}</Text>
-        <Text color={tiffany.fg}>{before}</Text>
-        <Text inverse>{at}</Text>
-        <Text color={tiffany.fg}>{after}</Text>
-      </Box>
-      <Box justifyContent="space-between" width="100%" marginTop={1}>
-        <Text color={tiffany.comment}>
-          {disabled ? "ctrl+c to cancel" : "enter send · /help commands · exit quit"}
+        <Text color={disabled ? tiffany.comment : tiffany.primary} bold>
+          {"✦ "}
         </Text>
-        <Text color={tiffany.comment}>{hintRight}</Text>
+        {showPlaceholder && !disabled ? (
+          <Text color={layout.inputBox.placeholder}>
+            Message Tarantul or type / for commands...
+          </Text>
+        ) : (
+          <>
+            <Text color={tiffany.fg}>{before}</Text>
+            <Text inverse>{at}</Text>
+            <Text color={tiffany.fg}>{after}</Text>
+          </>
+        )}
       </Box>
-      <Box justifyContent="space-between" width="100%">
-        <Text color={tiffany.comment}>{statusLeft}</Text>
-        <Text color={tiffany.comment}>{statusRight}</Text>
+
+      {/* Row below card: Hints (Left) + Model (Right) */}
+      <Box justifyContent="space-between" width="100%" marginTop={1} paddingX={1}>
+        <Box gap={2}>
+          <Text color={tiffany.comment}>
+            <Text bold color={tiffany.secondary}>
+              ↑↓
+            </Text>{" "}
+            history
+          </Text>
+          <Text color={tiffany.comment}>
+            <Text bold color={tiffany.secondary}>
+              tab
+            </Text>{" "}
+            autocomplete
+          </Text>
+          <Text color={tiffany.comment}>
+            <Text bold color={tiffany.secondary}>
+              /
+            </Text>{" "}
+            commands
+          </Text>
+        </Box>
+
+        {/* Model info on the right */}
+        <Box>
+          <Text color={tiffany.comment}>{`🤖 ${model}`}</Text>
+        </Box>
       </Box>
     </Box>
   );
-}
+};
 
-export function SelectPrompt({
+export const InputBar = memo(
+  InputBarInner,
+  (prev, next) =>
+    prev.value === next.value &&
+    prev.cursor === next.cursor &&
+    prev.model === next.model &&
+    prev.mode === next.mode &&
+    prev.disabled === next.disabled,
+);
+
+// ---------------------------------------------------------------------------
+// SelectPrompt — Arrow-key selector overlay (permissions, session picker)
+// ---------------------------------------------------------------------------
+
+const SelectPromptInner = ({
   spec,
   selectedIndex,
 }: {
   spec: SelectorSpec;
   selectedIndex: number;
-}): React.ReactElement {
+}): React.ReactElement => {
   const accent = spec.accent === "warn" ? tiffany.orange : tiffany.primary;
   const hint = spec.hint ?? "↑↓ select · enter confirm · esc cancel";
   return (
-    <Box
-      flexDirection="column"
-      width="100%"
-      borderStyle="single"
-      borderColor={accent}
-      paddingX={2}
-      paddingY={1}
-      marginBottom={1}
-    >
-      <Text color={accent} bold>{spec.title}</Text>
-      {(spec.body ?? []).map((line) => (
-        <Text key={line} color={tiffany.comment}>{line}</Text>
-      ))}
-      <Box flexDirection="column" marginTop={1} marginBottom={1}>
-        {spec.options.map((opt, i) => {
-          const selected = i === selectedIndex;
-          return (
-            <Text key={`${opt.label}-${i}`}>
-              <Text color={tiffany.green}>{selected ? "[x] " : "[ ] "}</Text>
-              <Text color={selected ? tiffany.fg : tiffany.comment} bold={selected}>
-                {opt.label}
-              </Text>
-              {opt.detail ? <Text color={tiffany.comment}>{`  ${opt.detail}`}</Text> : null}
-            </Text>
-          );
-        })}
+    <Box flexDirection="column" width="100%" paddingX={2} marginBottom={1}>
+      <Box
+        flexDirection="column"
+        width="100%"
+        borderStyle="round"
+        borderColor={accent}
+        paddingX={2}
+        paddingY={1}
+      >
+        <Text color={accent} bold>
+          {spec.title}
+        </Text>
+        {(spec.body ?? []).map((line) => (
+          <Text key={line} color={tiffany.comment}>
+            {line}
+          </Text>
+        ))}
+        <Box flexDirection="column" marginTop={1} marginBottom={1}>
+          {spec.options.map((opt, i) => {
+            const selected = i === selectedIndex;
+            return (
+              <Box key={`${opt.label}-${i}`} gap={1}>
+                <Text color={tiffany.green}>{selected ? "[x]" : "[ ]"}</Text>
+                <Text color={selected ? tiffany.fg : tiffany.comment} bold={selected}>
+                  {opt.label}
+                </Text>
+                {opt.detail ? <Text color={tiffany.comment}>{opt.detail}</Text> : null}
+              </Box>
+            );
+          })}
+        </Box>
+        <Text color={tiffany.comment}>{hint}</Text>
       </Box>
-      <Text color={tiffany.comment}>{hint}</Text>
     </Box>
   );
-}
+};
 
-export function SuggestionList({
+export const SelectPrompt = memo(
+  SelectPromptInner,
+  (prev, next) => prev.spec === next.spec && prev.selectedIndex === next.selectedIndex,
+);
+
+// ---------------------------------------------------------------------------
+// SuggestionList — Slash-command autocomplete dropdown
+// ---------------------------------------------------------------------------
+
+const SuggestionListInner = ({
   items,
   selectedIndex,
 }: {
   items: readonly SlashCommand[];
   selectedIndex: number;
-}): React.ReactElement {
+}): React.ReactElement => {
   return (
     <Box flexDirection="column" paddingX={2} marginBottom={1}>
       {items.map((c, i) => {
@@ -312,10 +422,15 @@ export function SuggestionList({
         );
       })}
       <Box marginTop={1}>
-        <Text color={tiffany.comment}>↑↓ select · tab complete · enter run · esc dismiss</Text>
+        <Text color={tiffany.comment}>{"↑↓ select · tab complete · enter run · esc dismiss"}</Text>
       </Box>
     </Box>
   );
-}
+};
+
+export const SuggestionList = memo(
+  SuggestionListInner,
+  (prev, next) => prev.items === next.items && prev.selectedIndex === next.selectedIndex,
+);
 
 export { toolCallLabel };
