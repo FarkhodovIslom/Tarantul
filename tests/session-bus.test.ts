@@ -115,9 +115,9 @@ describe("Session", () => {
 
   it("getHistory skips consolidated messages", () => {
     const s = new Session({ key: "test:1" });
-    s.addMessage("user", "old");     // index 0 — consolidated
+    s.addMessage("user", "old"); // index 0 — consolidated
     s.addMessage("assistant", "r1"); // index 1 — consolidated
-    s.addMessage("user", "new");     // index 2
+    s.addMessage("user", "new"); // index 2
     s.lastConsolidated = 2;
     const h = s.getHistory(0);
     expect(h.length).toBe(1);

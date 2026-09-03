@@ -1,5 +1,3 @@
-
-
 import { existsSync, statSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { logger } from "../utils/logger.js";
@@ -54,12 +52,14 @@ function deserializeStore(raw: string): CronStore {
         lastRunAtMs: (st["lastRunAtMs"] as number | undefined) ?? null,
         lastStatus: (st["lastStatus"] as CronStatus | undefined) ?? null,
         lastError: (st["lastError"] as string | undefined) ?? null,
-        runHistory: ((st["runHistory"] as Record<string, unknown>[] | undefined) ?? []).map((r) => ({
-          runAtMs: r["runAtMs"] as number,
-          status: r["status"] as CronStatus,
-          durationMs: (r["durationMs"] as number | undefined) ?? 0,
-          error: (r["error"] as string | undefined) ?? null,
-        })),
+        runHistory: ((st["runHistory"] as Record<string, unknown>[] | undefined) ?? []).map(
+          (r) => ({
+            runAtMs: r["runAtMs"] as number,
+            status: r["status"] as CronStatus,
+            durationMs: (r["durationMs"] as number | undefined) ?? 0,
+            error: (r["error"] as string | undefined) ?? null,
+          }),
+        ),
       },
       createdAtMs: (j["createdAtMs"] as number | undefined) ?? 0,
       updatedAtMs: (j["updatedAtMs"] as number | undefined) ?? 0,

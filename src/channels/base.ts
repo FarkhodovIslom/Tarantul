@@ -32,7 +32,9 @@ export abstract class BaseChannel {
   ) {}
 
   /** Whether the channel is currently running. */
-  get isRunning(): boolean { return this._running; }
+  get isRunning(): boolean {
+    return this._running;
+  }
 
   // ---------------------------------------------------------------------------
   // Abstract interface
@@ -48,14 +50,21 @@ export abstract class BaseChannel {
    * Raises on delivery failure so ChannelManager can retry.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async sendDelta(_chatId: string, _delta: string, _metadata?: Record<string, unknown>): Promise<void> {
+  async sendDelta(
+    _chatId: string,
+    _delta: string,
+    _metadata?: Record<string, unknown>,
+  ): Promise<void> {
     // no-op default — subclasses override to enable streaming
   }
 
   /** True when config enables streaming AND this subclass overrides sendDelta. */
   get supportsStreaming(): boolean {
     const streaming = (this.config["streaming"] as boolean | undefined) ?? false;
-    return Boolean(streaming) && Object.getPrototypeOf(this).sendDelta !== BaseChannel.prototype.sendDelta;
+    return (
+      Boolean(streaming) &&
+      Object.getPrototypeOf(this).sendDelta !== BaseChannel.prototype.sendDelta
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -89,10 +98,7 @@ export abstract class BaseChannel {
 
     if (!this.isAllowed(senderId)) {
       const name = (this.constructor as typeof BaseChannel).channelName;
-      logger.warn(
-        { channel: name, senderId },
-        "Access denied. Add sender to allowFrom in config.",
-      );
+      logger.warn({ channel: name, senderId }, "Access denied. Add sender to allowFrom in config.");
       return;
     }
 

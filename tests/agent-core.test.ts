@@ -177,7 +177,9 @@ class MockProvider implements Partial<LLMProvider> {
     this.responses = responses;
   }
 
-  getDefaultModel() { return "mock-model"; }
+  getDefaultModel() {
+    return "mock-model";
+  }
 
   async chat(_opts: ChatOptions): Promise<LLMResponse> {
     const r = this.responses[this.callCount % this.responses.length]!;
@@ -219,7 +221,10 @@ describe("AgentRunner", () => {
     ]);
     const runner = new AgentRunner(provider as unknown as LLMProvider);
     const result = await runner.run({
-      ...makeSpec(provider, [{ role: "system", content: "sys" }, { role: "user", content: "hi" }]),
+      ...makeSpec(provider, [
+        { role: "system", content: "sys" },
+        { role: "user", content: "hi" },
+      ]),
     });
     expect(result.finalContent).toBe("Hello from AI");
     expect(result.stopReason).toBe("completed");
@@ -305,7 +310,9 @@ describe("AgentRunner", () => {
       readonly name = "nop";
       readonly description = "Does nothing";
       readonly parameters = { type: "object", properties: {} };
-      async execute() { return "done"; }
+      async execute() {
+        return "done";
+      }
     }
     const registry = new ToolRegistry();
     registry.register(new NopTool());
@@ -522,7 +529,9 @@ describe("AgentRunner — onToolStart/onToolEnd hooks", () => {
       readonly name = "ping";
       readonly description = "Ping";
       readonly parameters = { type: "object", properties: {} };
-      async execute() { return "pong"; }
+      async execute() {
+        return "pong";
+      }
     }
     const registry = new ToolRegistry();
     registry.register(new PingTool());
@@ -566,7 +575,9 @@ describe("AgentRunner — onToolStart/onToolEnd hooks", () => {
       readonly name = "ok_tool";
       readonly description = "Always ok";
       readonly parameters = { type: "object", properties: {} };
-      async execute() { return "success result"; }
+      async execute() {
+        return "success result";
+      }
     }
     const registry = new ToolRegistry();
     registry.register(new OkTool());
@@ -607,7 +618,9 @@ describe("AgentRunner — onToolStart/onToolEnd hooks", () => {
       readonly name = "boom";
       readonly description = "Always explodes";
       readonly parameters = { type: "object", properties: {} };
-      async execute(): Promise<string> { throw new Error("kaboom"); }
+      async execute(): Promise<string> {
+        throw new Error("kaboom");
+      }
     }
     const registry = new ToolRegistry();
     registry.register(new BoomTool());
@@ -712,7 +725,9 @@ describe("CompositeHook", () => {
 
   it("wantsStreaming returns true if any hook wants streaming", () => {
     class StreamingHook extends AgentHook {
-      override wantsStreaming() { return true; }
+      override wantsStreaming() {
+        return true;
+      }
     }
     const composite = new CompositeHook([new AgentHook(), new StreamingHook()]);
     expect(composite.wantsStreaming()).toBe(true);
@@ -726,8 +741,12 @@ describe("CompositeHook", () => {
   it("beforeIteration fans out to all hooks", async () => {
     const calls: string[] = [];
     class TrackHook extends AgentHook {
-      constructor(private id: string) { super(); }
-      override async beforeIteration(_ctx: AgentHookContext) { calls.push(this.id); }
+      constructor(private id: string) {
+        super();
+      }
+      override async beforeIteration(_ctx: AgentHookContext) {
+        calls.push(this.id);
+      }
     }
     const composite = new CompositeHook([new TrackHook("a"), new TrackHook("b")]);
     await composite.beforeIteration(makeCtx());
@@ -737,7 +756,9 @@ describe("CompositeHook", () => {
   it("onStream fans out to all hooks", async () => {
     const deltas: string[] = [];
     class DeltaHook extends AgentHook {
-      override async onStream(_ctx: AgentHookContext, delta: string) { deltas.push(delta); }
+      override async onStream(_ctx: AgentHookContext, delta: string) {
+        deltas.push(delta);
+      }
     }
     const composite = new CompositeHook([new DeltaHook(), new DeltaHook()]);
     await composite.onStream(makeCtx(), "hello");
@@ -759,7 +780,9 @@ describe("CompositeHook", () => {
   it("beforeExecuteTools fans out to all hooks", async () => {
     let count = 0;
     class CountHook extends AgentHook {
-      override async beforeExecuteTools(_ctx: AgentHookContext) { count++; }
+      override async beforeExecuteTools(_ctx: AgentHookContext) {
+        count++;
+      }
     }
     const composite = new CompositeHook([new CountHook(), new CountHook()]);
     await composite.beforeExecuteTools(makeCtx());
@@ -769,7 +792,9 @@ describe("CompositeHook", () => {
   it("afterIteration fans out to all hooks", async () => {
     let count = 0;
     class CountHook extends AgentHook {
-      override async afterIteration(_ctx: AgentHookContext) { count++; }
+      override async afterIteration(_ctx: AgentHookContext) {
+        count++;
+      }
     }
     const composite = new CompositeHook([new CountHook(), new CountHook()]);
     await composite.afterIteration(makeCtx());
@@ -779,8 +804,13 @@ describe("CompositeHook", () => {
   it("onToolStart fans out to all hooks", async () => {
     const names: string[] = [];
     class StartHook extends AgentHook {
-      constructor(private id: string) { super(); }
-      override async onToolStart(_ctx: AgentHookContext, tc: { name: string; id: string; arguments: Record<string, unknown> }) {
+      constructor(private id: string) {
+        super();
+      }
+      override async onToolStart(
+        _ctx: AgentHookContext,
+        tc: { name: string; id: string; arguments: Record<string, unknown> },
+      ) {
         names.push(`${this.id}:${tc.name}`);
       }
     }
@@ -792,22 +822,34 @@ describe("CompositeHook", () => {
   it("onToolEnd fans out to all hooks", async () => {
     const statuses: string[] = [];
     class EndHook extends AgentHook {
-      override async onToolEnd(_ctx: AgentHookContext, _tc: { name: string; id: string; arguments: Record<string, unknown> }, event: ToolEvent) {
+      override async onToolEnd(
+        _ctx: AgentHookContext,
+        _tc: { name: string; id: string; arguments: Record<string, unknown> },
+        event: ToolEvent,
+      ) {
         statuses.push(event.status);
       }
     }
     const composite = new CompositeHook([new EndHook(), new EndHook()]);
-    await composite.onToolEnd(makeCtx(), { id: "tc1", name: "read_file", arguments: {} }, { name: "read_file", status: "ok", detail: "done" });
+    await composite.onToolEnd(
+      makeCtx(),
+      { id: "tc1", name: "read_file", arguments: {} },
+      { name: "read_file", status: "ok", detail: "done" },
+    );
     expect(statuses).toEqual(["ok", "ok"]);
   });
 
   it("onToolStart isolates errors from one hook so others still run", async () => {
     const called: string[] = [];
     class BadStart extends AgentHook {
-      override async onToolStart(): Promise<void> { throw new Error("boom"); }
+      override async onToolStart(): Promise<void> {
+        throw new Error("boom");
+      }
     }
     class GoodStart extends AgentHook {
-      override async onToolStart(): Promise<void> { called.push("good"); }
+      override async onToolStart(): Promise<void> {
+        called.push("good");
+      }
     }
     const composite = new CompositeHook([new BadStart(), new GoodStart()]);
     await composite.onToolStart(makeCtx(), { id: "tc1", name: "nop", arguments: {} });
@@ -817,13 +859,21 @@ describe("CompositeHook", () => {
   it("onToolEnd isolates errors from one hook so others still run", async () => {
     const called: string[] = [];
     class BadEnd extends AgentHook {
-      override async onToolEnd(): Promise<void> { throw new Error("boom"); }
+      override async onToolEnd(): Promise<void> {
+        throw new Error("boom");
+      }
     }
     class GoodEnd extends AgentHook {
-      override async onToolEnd(): Promise<void> { called.push("good"); }
+      override async onToolEnd(): Promise<void> {
+        called.push("good");
+      }
     }
     const composite = new CompositeHook([new BadEnd(), new GoodEnd()]);
-    await composite.onToolEnd(makeCtx(), { id: "tc1", name: "nop", arguments: {} }, { name: "nop", status: "ok", detail: "" });
+    await composite.onToolEnd(
+      makeCtx(),
+      { id: "tc1", name: "nop", arguments: {} },
+      { name: "nop", status: "ok", detail: "" },
+    );
     expect(called).toContain("good");
   });
 
@@ -835,7 +885,9 @@ describe("CompositeHook", () => {
       }
     }
     class GoodHook extends AgentHook {
-      override async beforeIteration(_ctx: AgentHookContext) { calls.push("good"); }
+      override async beforeIteration(_ctx: AgentHookContext) {
+        calls.push("good");
+      }
     }
     const composite = new CompositeHook([new BadHook(), new GoodHook()]);
     // Should not throw despite BadHook error
@@ -845,7 +897,9 @@ describe("CompositeHook", () => {
 
   it("finalizeContent chains through hooks in order", () => {
     class AppendHook extends AgentHook {
-      constructor(private suffix: string) { super(); }
+      constructor(private suffix: string) {
+        super();
+      }
       override finalizeContent(_ctx: AgentHookContext, content: string | null | undefined) {
         return (content ?? "") + this.suffix;
       }
@@ -869,39 +923,47 @@ describe("SystemPromptCache", () => {
   let wsDir: string;
 
   beforeEach(() => {
-    wsDir = join(tmpdir(), `tarantul-ctx-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    wsDir = join(
+      tmpdir(),
+      `tarantul-ctx-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
     mkdirSync(wsDir, { recursive: true });
   });
 
   it("builds a non-empty system prompt", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("cli:direct","", "", "");
+    const prompt = cache.get("cli:direct", "", "", "");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
   });
 
   it("includes memory content when provided", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("cli:direct","## My memory content", "", "");
+    const prompt = cache.get("cli:direct", "## My memory content", "", "");
     expect(prompt).toContain("My memory content");
   });
 
   it("includes skills summary when provided", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("cli:direct","", "<skills><skill>test</skill></skills>", "");
+    const prompt = cache.get("cli:direct", "", "<skills><skill>test</skill></skills>", "");
     expect(prompt).toContain("<skills>");
   });
 
   it("includes always-skills content when provided", () => {
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("cli:direct","", "", "### Skill: memory\n\nMemory instructions here.");
+    const prompt = cache.get(
+      "cli:direct",
+      "",
+      "",
+      "### Skill: memory\n\nMemory instructions here.",
+    );
     expect(prompt).toContain("Memory instructions");
   });
 
   it("returns same string on second call (cache hit)", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("cli:direct","memory", "skills", "always");
-    const second = cache.get("cli:direct","memory", "skills", "always");
+    const first = cache.get("cli:direct", "memory", "skills", "always");
+    const second = cache.get("cli:direct", "memory", "skills", "always");
     expect(first).toBe(second); // identical object reference — cache hit
   });
 
@@ -935,23 +997,23 @@ describe("SystemPromptCache", () => {
 
   it("rebuilds when memory content changes", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("cli:direct","memory v1", "", "");
-    const second = cache.get("cli:direct","memory v2", "", "");
+    const first = cache.get("cli:direct", "memory v1", "", "");
+    const second = cache.get("cli:direct", "memory v2", "", "");
     expect(first).not.toBe(second);
   });
 
   it("rebuilds when skills summary changes", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("cli:direct","", "skills v1", "");
-    const second = cache.get("cli:direct","", "skills v2", "");
+    const first = cache.get("cli:direct", "", "skills v1", "");
+    const second = cache.get("cli:direct", "", "skills v2", "");
     expect(first).not.toBe(second);
   });
 
   it("invalidate clears cached entry", () => {
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("cli:direct","mem", "skills", "");
+    const first = cache.get("cli:direct", "mem", "skills", "");
     cache.invalidate();
-    const second = cache.get("cli:direct","mem", "skills", "");
+    const second = cache.get("cli:direct", "mem", "skills", "");
     // After invalidation + same inputs, a new string is built (not the old ref)
     expect(first).toEqual(second); // same content
   });
@@ -959,7 +1021,7 @@ describe("SystemPromptCache", () => {
   it("includes bootstrap file content when file exists", () => {
     writeFileSync(join(wsDir, "AGENTS.md"), "# Custom agents instructions");
     const cache = new SystemPromptCache(wsDir);
-    const prompt = cache.get("cli:direct","", "", "");
+    const prompt = cache.get("cli:direct", "", "", "");
     expect(prompt).toContain("Custom agents instructions");
   });
 
@@ -967,12 +1029,12 @@ describe("SystemPromptCache", () => {
     const filePath = join(wsDir, "AGENTS.md");
     writeFileSync(filePath, "version 1");
     const cache = new SystemPromptCache(wsDir);
-    const first = cache.get("cli:direct","", "", "");
+    const first = cache.get("cli:direct", "", "", "");
     // Wait briefly then update the file
     await new Promise((r) => setTimeout(r, 10));
     writeFileSync(filePath, "version 2");
     // Touch mtime by reading stat
-    const second = cache.get("cli:direct","", "", "");
+    const second = cache.get("cli:direct", "", "", "");
     // Content changed so prompt should differ
     expect(second).toContain("version 2");
   });
@@ -1025,7 +1087,7 @@ describe("buildMessages", () => {
       channel: "telegram",
       chatId: "chat123",
     });
-    const userContent = String((msgs[msgs.length - 1]!["content"]));
+    const userContent = String(msgs[msgs.length - 1]!["content"]);
     expect(userContent).toContain("telegram");
     expect(userContent).toContain("chat123");
   });

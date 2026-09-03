@@ -83,7 +83,10 @@ function extractTextContent(value: unknown): string | null {
     for (const item of value) {
       if (typeof item === "object" && item !== null) {
         const text = (item as Record<string, unknown>)["text"];
-        if (typeof text === "string") { parts.push(text); continue; }
+        if (typeof text === "string") {
+          parts.push(text);
+          continue;
+        }
       }
       if (typeof item === "string") parts.push(item);
     }
@@ -139,14 +142,35 @@ function parseToolCalls(rawToolCalls: Record<string, unknown>[]): ToolCallReques
     const fn = (tc["function"] as Record<string, unknown>) ?? {};
     let args: unknown = fn["arguments"] ?? {};
     if (typeof args === "string") {
-      try { args = JSON.parse(args); } catch { args = {}; }
+      try {
+        args = JSON.parse(args);
+      } catch {
+        args = {};
+      }
     }
     const rawId = typeof tc["id"] === "string" && tc["id"] ? String(tc["id"]) : shortToolId();
-    return {
+    const result: ToolCallRequest = {
       id: rawId,
       name: String(fn["name"] ?? ""),
-      arguments: typeof args === "object" && args !== null ? args as Record<string, unknown> : {},
+      arguments: typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {},
     };
+    // Round-trip provider-specific metadata (e.g. Gemini's
+    // `extra_content.google.thought_signature` is required on the next
+    // request, otherwise the native OpenAI-compat shim returns
+    // 400 "Function call is missing a thought_signature ...").
+    const extra = tc["extra_content"];
+    if (extra && typeof extra === "object" && !Array.isArray(extra)) {
+      result.extraContent = extra as Record<string, unknown>;
+    }
+    const psf = tc["provider_specific_fields"];
+    if (psf && typeof psf === "object" && !Array.isArray(psf)) {
+      result.providerSpecificFields = psf as Record<string, unknown>;
+    }
+    const fnPsf = fn["provider_specific_fields"];
+    if (fnPsf && typeof fnPsf === "object" && !Array.isArray(fnPsf)) {
+      result.functionProviderSpecificFields = fnPsf as Record<string, unknown>;
+    }
+    return result;
   });
 }
 
@@ -157,9 +181,19 @@ function parseResponse(response: unknown): LLMResponse {
   if (choices.length === 0) {
     const content = extractTextContent(resp?.["content"] ?? resp?.["output_text"]);
     if (content !== null) {
-      return { content, toolCalls: [], finishReason: String(resp?.["finish_reason"] ?? "stop"), usage: extractUsage(response) };
+      return {
+        content,
+        toolCalls: [],
+        finishReason: String(resp?.["finish_reason"] ?? "stop"),
+        usage: extractUsage(response),
+      };
     }
-    return { content: "Error: API returned empty choices.", toolCalls: [], finishReason: "error", usage: {} };
+    return {
+      content: "Error: API returned empty choices.",
+      toolCalls: [],
+      finishReason: "error",
+      usage: {},
+    };
   }
 
   const choice0 = choices[0]!;
@@ -179,7 +213,8 @@ function parseResponse(response: unknown): LLMResponse {
       }
     }
     if (!content) content = extractTextContent(m["content"]);
-    if (!reasoningContent) reasoningContent = (m["reasoning_content"] as string | undefined) ?? null;
+    if (!reasoningContent)
+      reasoningContent = (m["reasoning_content"] as string | undefined) ?? null;
   }
 
   return {
@@ -201,13 +236,15 @@ export class OpenAICompatProvider extends LLMProvider {
   private readonly spec: ProviderSpec | null;
   private readonly extraHeaders: Record<string, string>;
 
-  constructor(opts: {
-    apiKey?: string | null;
-    apiBase?: string | null;
-    defaultModel?: string;
-    extraHeaders?: Record<string, string> | null;
-    spec?: ProviderSpec | null;
-  } = {}) {
+  constructor(
+    opts: {
+      apiKey?: string | null;
+      apiBase?: string | null;
+      defaultModel?: string;
+      extraHeaders?: Record<string, string> | null;
+      spec?: ProviderSpec | null;
+    } = {},
+  ) {
     super(opts.apiKey, opts.apiBase);
     this.defaultModel = opts.defaultModel ?? "gpt-4o";
     this.spec = opts.spec ?? null;
@@ -287,7 +324,11 @@ export class OpenAICompatProvider extends LLMProvider {
     let tools = opts.tools ? [...opts.tools] : null;
     const spec = this.spec;
 
-    if (spec?.supportsPromptCaching && (modelName.toLowerCase().startsWith("anthropic/") || modelName.toLowerCase().startsWith("claude"))) {
+    if (
+      spec?.supportsPromptCaching &&
+      (modelName.toLowerCase().startsWith("anthropic/") ||
+        modelName.toLowerCase().startsWith("claude"))
+    ) {
       const cached = applyCacheControl(messages, tools);
       messages = cached.messages;
       tools = cached.tools;
@@ -344,7 +385,12 @@ export class OpenAICompatProvider extends LLMProvider {
       if (opts.signal?.aborted) {
         return { content: null, toolCalls: [], finishReason: "cancelled", usage: {} };
       }
-      return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
+      return {
+        content: `Error calling LLM: ${err}`,
+        toolCalls: [],
+        finishReason: "error",
+        usage: {},
+      };
     }
   }
 
@@ -353,17 +399,27 @@ export class OpenAICompatProvider extends LLMProvider {
     // caller-triggered abort can still return whatever streamed before it
     // fired, instead of discarding the partial reply in the catch below.
     let content = "";
-    const toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
+    const toolCallsMap = new Map<
+      number,
+      {
+        id: string;
+        name: string;
+        args: string;
+        extraContent: Record<string, unknown> | null;
+        providerSpecificFields: Record<string, unknown> | null;
+        functionProviderSpecificFields: Record<string, unknown> | null;
+      }
+    >();
     let finishReason = "stop";
     let usage: Record<string, number> = {};
     let reasoningContent = "";
     try {
       const kwargs = this.buildKwargs(opts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream: AsyncIterable<Record<string, unknown>> = await this.client.chat.completions.create(
-        { ...kwargs, stream: true } as any,
-        { signal: opts.signal ?? undefined },
-      ) as any;
+      const stream: AsyncIterable<Record<string, unknown>> =
+        (await this.client.chat.completions.create({ ...kwargs, stream: true } as any, {
+          signal: opts.signal ?? undefined,
+        })) as any;
 
       // Accumulate streaming response.
       for await (const chunk of stream) {
@@ -384,12 +440,34 @@ export class OpenAICompatProvider extends LLMProvider {
               const idx = (tc["index"] as number) ?? 0;
               const fn = (tc["function"] as Record<string, unknown>) ?? {};
               if (!toolCallsMap.has(idx)) {
-                toolCallsMap.set(idx, { id: "", name: "", args: "" });
+                toolCallsMap.set(idx, {
+                  id: "",
+                  name: "",
+                  args: "",
+                  extraContent: null,
+                  providerSpecificFields: null,
+                  functionProviderSpecificFields: null,
+                });
               }
               const entry = toolCallsMap.get(idx)!;
               if (tc["id"]) entry.id += String(tc["id"]);
               if (fn["name"]) entry.name += String(fn["name"]);
               if (fn["arguments"]) entry.args += String(fn["arguments"]);
+              // Round-trip Gemini's thought_signature (and any other
+              // provider-specific metadata that arrives on a single
+              // chunk — typical for the OpenAI-compat Gemini shim).
+              const extra = tc["extra_content"];
+              if (extra && typeof extra === "object" && !Array.isArray(extra)) {
+                entry.extraContent = extra as Record<string, unknown>;
+              }
+              const psf = tc["provider_specific_fields"];
+              if (psf && typeof psf === "object" && !Array.isArray(psf)) {
+                entry.providerSpecificFields = psf as Record<string, unknown>;
+              }
+              const fnPsf = fn["provider_specific_fields"];
+              if (fnPsf && typeof fnPsf === "object" && !Array.isArray(fnPsf)) {
+                entry.functionProviderSpecificFields = fnPsf as Record<string, unknown>;
+              }
             }
           }
           if (choice["finish_reason"]) finishReason = String(choice["finish_reason"]);
@@ -415,11 +493,23 @@ export class OpenAICompatProvider extends LLMProvider {
       const toolCalls: ToolCallRequest[] = [];
       for (const [, entry] of toolCallsMap) {
         let args: unknown;
-        try { args = JSON.parse(entry.args); } catch { args = {}; }
+        try {
+          args = JSON.parse(entry.args);
+        } catch {
+          args = {};
+        }
         toolCalls.push({
           id: entry.id || shortToolId(),
           name: entry.name,
-          arguments: typeof args === "object" && args !== null ? args as Record<string, unknown> : {},
+          arguments:
+            typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {},
+          ...(entry.extraContent ? { extraContent: entry.extraContent } : {}),
+          ...(entry.providerSpecificFields
+            ? { providerSpecificFields: entry.providerSpecificFields }
+            : {}),
+          ...(entry.functionProviderSpecificFields
+            ? { functionProviderSpecificFields: entry.functionProviderSpecificFields }
+            : {}),
         });
       }
 
@@ -440,7 +530,12 @@ export class OpenAICompatProvider extends LLMProvider {
           reasoningContent: reasoningContent || null,
         };
       }
-      return { content: `Error calling LLM: ${err}`, toolCalls: [], finishReason: "error", usage: {} };
+      return {
+        content: `Error calling LLM: ${err}`,
+        toolCalls: [],
+        finishReason: "error",
+        usage: {},
+      };
     }
   }
 }

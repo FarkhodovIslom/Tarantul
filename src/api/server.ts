@@ -301,18 +301,32 @@ async function handleChatCompletions(
 
   const runOnce = () =>
     runTurn(
-      userContent, sessionKey, runner, sessions, tools, runSpec, opts.modelName, opts.getSystemPrompt,
+      userContent,
+      sessionKey,
+      runner,
+      sessions,
+      tools,
+      runSpec,
+      opts.modelName,
+      opts.getSystemPrompt,
       controller.signal,
     );
   const turn = opts.wrapTurn ? opts.wrapTurn(sessionKey, runOnce) : runOnce();
-  turn.catch(() => { /* surfaced below */ })
+  turn
+    .catch(() => {
+      /* surfaced below */
+    })
     .finally(() => {
       abortRegistry.remove(sessionKey);
       release();
     });
 
   try {
-    const { text: responseText, usage, toolsUsed } = await withTimeout(turn, opts.timeoutSecs * 1000);
+    const {
+      text: responseText,
+      usage,
+      toolsUsed,
+    } = await withTimeout(turn, opts.timeoutSecs * 1000);
     return jsonResponse(chatCompletionResponse(responseText, opts.modelName, usage, toolsUsed));
   } catch (err) {
     if (err instanceof TimeoutError) {
@@ -346,7 +360,10 @@ async function handleStreamingChat(
   const chunkId = `chatcmpl-${randomBytes(6).toString("hex")}`;
   const created = Math.floor(Date.now() / 1000);
 
-  logger.info({ sessionKey, content: userContent.slice(0, 80), stream: true }, "api request (stream)");
+  logger.info(
+    { sessionKey, content: userContent.slice(0, 80), stream: true },
+    "api request (stream)",
+  );
 
   let streamHook: ServerStreamHook | null = null;
 
@@ -360,7 +377,8 @@ async function handleStreamingChat(
           const session = sessions.getOrCreate(sessionKey);
           const history = session.getHistory(0);
 
-          const systemPrompt = opts.getSystemPrompt?.(sessionKey) ?? "You are a helpful AI assistant.";
+          const systemPrompt =
+            opts.getSystemPrompt?.(sessionKey) ?? "You are a helpful AI assistant.";
           const messages = buildMessages({
             history,
             currentMessage: userContent,
@@ -381,10 +399,7 @@ async function handleStreamingChat(
           // If no streaming happened and there's content, emit it now
           if (!streamHook!.didStream && text) {
             // The hook will emit it as a single chunk
-            await streamHook!.onStream(
-              { iteration: 0, messages: [] },
-              text,
-            );
+            await streamHook!.onStream({ iteration: 0, messages: [] }, text);
           }
 
           // Persist full turn (fix: include all runner messages, not just text)
@@ -405,9 +420,7 @@ async function handleStreamingChat(
           streamHook!.close(finishReason);
         } catch (err) {
           logger.error({ err, sessionKey }, "streaming turn error");
-          streamHook!.closeWithError(
-            err instanceof Error ? err.message : "Internal server error",
-          );
+          streamHook!.closeWithError(err instanceof Error ? err.message : "Internal server error");
         } finally {
           abortRegistry.remove(sessionKey);
           release();
@@ -431,7 +444,7 @@ async function handleStreamingChat(
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
+      Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },
   });
@@ -632,10 +645,7 @@ async function handleCancel(
 // Settings handlers
 // ---------------------------------------------------------------------------
 
-async function handleGetSettings(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handleGetSettings(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
@@ -646,10 +656,7 @@ async function handleGetSettings(
   return jsonResponse(opts.settings.overview());
 }
 
-async function handlePatchSettings(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handlePatchSettings(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
@@ -676,10 +683,7 @@ async function handlePatchSettings(
   return jsonResponse({ ok: true, path: body.path });
 }
 
-async function handleGetProviders(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handleGetProviders(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
@@ -696,10 +700,7 @@ async function handleGetProviders(
   return jsonResponse({ providers: withModels });
 }
 
-async function handleSetModel(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handleSetModel(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
@@ -737,16 +738,11 @@ async function handleSetModel(
 // Status / Usage / Help handlers
 // ---------------------------------------------------------------------------
 
-async function handleStatus(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handleStatus(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
-  const uptime = opts.startedAt
-    ? Math.floor(Date.now() / 1000 - opts.startedAt)
-    : 0;
+  const uptime = opts.startedAt ? Math.floor(Date.now() / 1000 - opts.startedAt) : 0;
   const uptimeStr =
     uptime < 60
       ? `${uptime}s`
@@ -782,16 +778,17 @@ async function handleUsage(
   });
 }
 
-async function handleHelp(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handleHelp(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
   return jsonResponse({
     endpoints: [
-      { method: "POST", path: "/v1/chat/completions", description: "Chat with the agent (supports stream=true)" },
+      {
+        method: "POST",
+        path: "/v1/chat/completions",
+        description: "Chat with the agent (supports stream=true)",
+      },
       { method: "GET", path: "/v1/models", description: "List available models" },
       { method: "GET", path: "/v1/sessions", description: "List all sessions" },
       { method: "POST", path: "/v1/sessions", description: "Create a new session" },
@@ -805,8 +802,16 @@ async function handleHelp(
       { method: "GET", path: "/v1/status", description: "Server status" },
       { method: "GET", path: "/v1/usage", description: "Default session usage" },
       { method: "GET", path: "/v1/usage/:session_id", description: "Session usage" },
-      { method: "GET", path: "/v1/permissions/pending", description: "List pending tool permissions" },
-      { method: "POST", path: "/v1/permissions/:id/resolve", description: "Allow or deny a tool permission" },
+      {
+        method: "GET",
+        path: "/v1/permissions/pending",
+        description: "List pending tool permissions",
+      },
+      {
+        method: "POST",
+        path: "/v1/permissions/:id/resolve",
+        description: "Allow or deny a tool permission",
+      },
       { method: "GET", path: "/v1/help", description: "This endpoint" },
       { method: "GET", path: "/health", description: "Health check" },
     ],
@@ -817,10 +822,7 @@ async function handleHelp(
 // Permission handlers
 // ---------------------------------------------------------------------------
 
-async function handleListPermissions(
-  req: Request,
-  opts: ApiServerOpts,
-): Promise<Response> {
+async function handleListPermissions(req: Request, opts: ApiServerOpts): Promise<Response> {
   const authErr = checkAuth(req, opts);
   if (authErr) return authErr;
 
@@ -846,7 +848,7 @@ async function handleResolvePermission(
   try {
     body = (await req.json()) as { allow: boolean };
   } catch {
-    return errorResponse(400, "Invalid JSON body — expected { \"allow\": true|false }");
+    return errorResponse(400, 'Invalid JSON body — expected { "allow": true|false }');
   }
 
   if (typeof body.allow !== "boolean") {
@@ -898,8 +900,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new TimeoutError(ms)), ms);
     promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
     );
   });
 }
@@ -941,7 +949,16 @@ export class ApiServer {
 
         // ----- Chat completions -----
         if (method === "POST" && path === "/v1/chat/completions") {
-          return handleChatCompletions(req, opts, runner, sessions, tools, runSpec, mutexRegistry, abortRegistry);
+          return handleChatCompletions(
+            req,
+            opts,
+            runner,
+            sessions,
+            tools,
+            runSpec,
+            mutexRegistry,
+            abortRegistry,
+          );
         }
 
         // ----- Models -----

@@ -1,4 +1,3 @@
-
 import type { OutboundMessage } from "../bus/events.js";
 import type { CommandContext } from "./router.js";
 import { CommandRouter } from "./router.js";
@@ -15,7 +14,8 @@ async function cmdStop(ctx: CommandContext): Promise<OutboundMessage> {
   let cancelled = 0;
 
   if (loop) {
-    const tasks = loop.activeTasks.get(msg.sessionKeyOverride ?? `${msg.channel}:${msg.chatId}`) ?? [];
+    const tasks =
+      loop.activeTasks.get(msg.sessionKeyOverride ?? `${msg.channel}:${msg.chatId}`) ?? [];
     for (const task of tasks) {
       if (!task.done && task.cancel()) cancelled++;
     }
@@ -74,9 +74,7 @@ async function cmdStatus(ctx: CommandContext): Promise<OutboundMessage> {
     sessionMsgs = session.getHistory(0).length;
   }
 
-  const uptime = loop
-    ? Math.floor((Date.now() / 1000 - loop.startTime))
-    : 0;
+  const uptime = loop ? Math.floor(Date.now() / 1000 - loop.startTime) : 0;
   const uptimeStr =
     uptime < 60
       ? `${uptime}s`
@@ -95,7 +93,7 @@ async function cmdStatus(ctx: CommandContext): Promise<OutboundMessage> {
   if (lastUsage["prompt_tokens"]) {
     lines.push(
       `Last call: ${lastUsage["prompt_tokens"]} prompt / ` +
-      `${lastUsage["completion_tokens"] ?? 0} completion tokens`,
+        `${lastUsage["completion_tokens"] ?? 0} completion tokens`,
     );
     if (lastUsage["cached_tokens"]) {
       lines.push(`  Cached: ${lastUsage["cached_tokens"]} tokens`);

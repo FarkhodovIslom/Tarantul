@@ -138,7 +138,11 @@ describe("MemoryIndex (hybrid with embedder)", () => {
         "Coffee preferences: the user likes a flat white in the morning.",
       ].join("\n"),
     );
-    const index = new MemoryIndex(store.dir, { embedder: new FakeEmbedder(), chunkMaxTokens: 12, chunkOverlapTokens: 2 });
+    const index = new MemoryIndex(store.dir, {
+      embedder: new FakeEmbedder(),
+      chunkMaxTokens: 12,
+      chunkOverlapTokens: 2,
+    });
     await index.reindex();
 
     const hits = await index.search("postgres database migration", { limit: 3 });

@@ -5,10 +5,31 @@
  */
 
 const NAMED_ENTITIES: Record<string, string> = {
-  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", "#39": "'",
-  mdash: "—", ndash: "–", hellip: "…", copy: "©", reg: "®", trade: "™",
-  laquo: "«", raquo: "»", ldquo: "“", rdquo: "”", lsquo: "‘", rsquo: "’",
-  deg: "°", euro: "€", pound: "£", cent: "¢", middot: "·", bull: "•",
+  nbsp: " ",
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  "#39": "'",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  laquo: "«",
+  raquo: "»",
+  ldquo: "“",
+  rdquo: "”",
+  lsquo: "‘",
+  rsquo: "’",
+  deg: "°",
+  euro: "€",
+  pound: "£",
+  cent: "¢",
+  middot: "·",
+  bull: "•",
 };
 
 function safeCodePoint(n: number): string {
@@ -50,12 +71,18 @@ export interface ReadablePage {
  * present. Best-effort and regex-based — good enough to feed an LLM.
  */
 export function extractReadable(html: string): ReadablePage {
-  const title = htmlToInline((/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "")).slice(0, 300);
+  const title = htmlToInline(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").slice(
+    0,
+    300,
+  );
 
   // Drop non-content elements entirely (including their contents).
   let body = html
     .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(script|style|noscript|template|svg|iframe|form|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, " ");
+    .replace(
+      /<(script|style|noscript|template|svg|iframe|form|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi,
+      " ",
+    );
 
   // Prefer the main content region if the page marks one.
   const main = /<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(body);

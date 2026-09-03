@@ -1,4 +1,3 @@
-
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -38,7 +37,9 @@ export function getWorkspacePath(workspace?: string): string {
 
 export function isDefaultWorkspace(workspace?: string | null): boolean {
   const current = workspace
-    ? (workspace.startsWith("~/") ? workspace.replace("~", homedir()) : workspace)
+    ? workspace.startsWith("~/")
+      ? workspace.replace("~", homedir())
+      : workspace
     : join(homedir(), ".tarantul", "workspace");
   const defaultPath = join(homedir(), ".tarantul", "workspace");
   return current === defaultPath;

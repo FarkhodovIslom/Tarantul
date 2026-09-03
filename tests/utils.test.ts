@@ -143,13 +143,17 @@ describe("repeatedExternalLookupError", () => {
 
   it("returns null on first web_fetch call", () => {
     const counts = new Map<string, number>();
-    expect(repeatedExternalLookupError("web_fetch", { url: "https://example.com" }, counts)).toBeNull();
+    expect(
+      repeatedExternalLookupError("web_fetch", { url: "https://example.com" }, counts),
+    ).toBeNull();
   });
 
   it("returns null on second web_fetch call (within limit)", () => {
     const counts = new Map<string, number>();
     repeatedExternalLookupError("web_fetch", { url: "https://example.com" }, counts);
-    expect(repeatedExternalLookupError("web_fetch", { url: "https://example.com" }, counts)).toBeNull();
+    expect(
+      repeatedExternalLookupError("web_fetch", { url: "https://example.com" }, counts),
+    ).toBeNull();
   });
 
   it("returns error on third web_fetch call (exceeds limit)", () => {
@@ -166,7 +170,9 @@ describe("repeatedExternalLookupError", () => {
     repeatedExternalLookupError("web_fetch", { url: "https://a.com" }, counts);
     repeatedExternalLookupError("web_fetch", { url: "https://a.com" }, counts);
     // Third call for a.com → error
-    expect(repeatedExternalLookupError("web_fetch", { url: "https://a.com" }, counts)).not.toBeNull();
+    expect(
+      repeatedExternalLookupError("web_fetch", { url: "https://a.com" }, counts),
+    ).not.toBeNull();
     // First call for b.com → null
     expect(repeatedExternalLookupError("web_fetch", { url: "https://b.com" }, counts)).toBeNull();
   });

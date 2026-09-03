@@ -10,7 +10,12 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 
 import { BaseChannel } from "../src/channels/base.js";
-import { registerChannel, getChannelClass, allChannels, registeredChannelNames } from "../src/channels/registry.js";
+import {
+  registerChannel,
+  getChannelClass,
+  allChannels,
+  registeredChannelNames,
+} from "../src/channels/registry.js";
 import { MessageBus } from "../src/bus/queue.js";
 import type { OutboundMessage } from "../src/bus/events.js";
 
@@ -27,10 +32,22 @@ class FakeChannel extends BaseChannel {
   startCalled = false;
   stopCalled = false;
 
-  override async start(): Promise<void> { this._running = true; this.startCalled = true; }
-  override async stop(): Promise<void> { this._running = false; this.stopCalled = true; }
-  override async send(msg: OutboundMessage): Promise<void> { this.sent.push(msg); }
-  override async sendDelta(chatId: string, delta: string, meta?: Record<string, unknown>): Promise<void> {
+  override async start(): Promise<void> {
+    this._running = true;
+    this.startCalled = true;
+  }
+  override async stop(): Promise<void> {
+    this._running = false;
+    this.stopCalled = true;
+  }
+  override async send(msg: OutboundMessage): Promise<void> {
+    this.sent.push(msg);
+  }
+  override async sendDelta(
+    chatId: string,
+    delta: string,
+    meta?: Record<string, unknown>,
+  ): Promise<void> {
     this.deltas.push({ chatId, delta, meta: meta ?? {} });
   }
 }
@@ -40,15 +57,21 @@ class ThrowingChannel extends BaseChannel {
   static override readonly displayName = "Throwing";
   callCount = 0;
 
-  override async start(): Promise<void> { this._running = true; }
-  override async stop(): Promise<void> { this._running = false; }
+  override async start(): Promise<void> {
+    this._running = true;
+  }
+  override async stop(): Promise<void> {
+    this._running = false;
+  }
   override async send(_msg: OutboundMessage): Promise<void> {
     this.callCount++;
     throw new Error("send always fails");
   }
 }
 
-function makeBus(): MessageBus { return new MessageBus(); }
+function makeBus(): MessageBus {
+  return new MessageBus();
+}
 
 function makeOutbound(override: Partial<OutboundMessage> = {}): OutboundMessage {
   return {
@@ -228,7 +251,9 @@ describe("ChannelManager._sendWithRetry", () => {
     // Use a minimal stand-in to test the retry logic
     let calls = 0;
     const fakeCh = {
-      send: async () => { calls++; },
+      send: async () => {
+        calls++;
+      },
       sendDelta: async () => {},
     };
     // Just verify FakeChannel.send works
@@ -253,9 +278,24 @@ describe("ChannelManager delta coalescing", () => {
     const ch = new FakeChannel({ allowFrom: ["*"] }, bus);
 
     // Put 3 deltas into the outbound queue
-    await bus.publishOutbound({ channel: "fake", chatId: "c1", content: "A", metadata: { _stream_delta: true } });
-    await bus.publishOutbound({ channel: "fake", chatId: "c1", content: "B", metadata: { _stream_delta: true } });
-    await bus.publishOutbound({ channel: "fake", chatId: "c1", content: "C", metadata: { _stream_delta: true, _stream_end: true } });
+    await bus.publishOutbound({
+      channel: "fake",
+      chatId: "c1",
+      content: "A",
+      metadata: { _stream_delta: true },
+    });
+    await bus.publishOutbound({
+      channel: "fake",
+      chatId: "c1",
+      content: "B",
+      metadata: { _stream_delta: true },
+    });
+    await bus.publishOutbound({
+      channel: "fake",
+      chatId: "c1",
+      content: "C",
+      metadata: { _stream_delta: true, _stream_end: true },
+    });
 
     // Consume first delta and coalesce
     const first = bus.tryConsumeOutbound()!;

@@ -115,10 +115,14 @@ describe("CommandRouter", () => {
   it("interceptor is skipped when exact matches first", async () => {
     const router = new CommandRouter();
     router.exact("/exact", async (ctx) => ({
-      channel: ctx.msg.channel, chatId: ctx.msg.chatId, content: "exact",
+      channel: ctx.msg.channel,
+      chatId: ctx.msg.chatId,
+      content: "exact",
     }));
     router.intercept(async (ctx) => ({
-      channel: ctx.msg.channel, chatId: ctx.msg.chatId, content: "interceptor",
+      channel: ctx.msg.channel,
+      chatId: ctx.msg.chatId,
+      content: "interceptor",
     }));
     const result = await router.dispatch(makeCtx("/exact"));
     expect(result?.content).toBe("exact");
@@ -140,7 +144,9 @@ describe("CommandRouter", () => {
   it("dispatchPriority calls priority handler", async () => {
     const router = new CommandRouter();
     router.priority("/stop", async (ctx) => ({
-      channel: ctx.msg.channel, chatId: ctx.msg.chatId, content: "stopped",
+      channel: ctx.msg.channel,
+      chatId: ctx.msg.chatId,
+      content: "stopped",
     }));
     const result = await router.dispatchPriority(makeCtx("/stop"));
     expect(result?.content).toBe("stopped");
@@ -148,7 +154,11 @@ describe("CommandRouter", () => {
 
   it("dispatchPriority returns null for non-priority commands", async () => {
     const router = new CommandRouter();
-    router.exact("/help", async (ctx) => ({ channel: ctx.msg.channel, chatId: ctx.msg.chatId, content: "help" }));
+    router.exact("/help", async (ctx) => ({
+      channel: ctx.msg.channel,
+      chatId: ctx.msg.chatId,
+      content: "help",
+    }));
     const result = await router.dispatchPriority(makeCtx("/help"));
     expect(result).toBeNull();
   });
@@ -156,9 +166,18 @@ describe("CommandRouter", () => {
   it("multiple interceptors are tried in order", async () => {
     const router = new CommandRouter();
     const order: number[] = [];
-    router.intercept(async () => { order.push(1); return null; });
-    router.intercept(async (ctx) => { order.push(2); return { channel: ctx.msg.channel, chatId: ctx.msg.chatId, content: "hit2" }; });
-    router.intercept(async () => { order.push(3); return null; });
+    router.intercept(async () => {
+      order.push(1);
+      return null;
+    });
+    router.intercept(async (ctx) => {
+      order.push(2);
+      return { channel: ctx.msg.channel, chatId: ctx.msg.chatId, content: "hit2" };
+    });
+    router.intercept(async () => {
+      order.push(3);
+      return null;
+    });
     const result = await router.dispatch(makeCtx("/any"));
     expect(order).toEqual([1, 2]);
     expect(result?.content).toBe("hit2");
@@ -213,12 +232,25 @@ describe("registerBuiltinCommands", () => {
       lastUsage: {},
       startTime: Date.now() / 1000,
       sessions: {
-        getOrCreate: () => { throw new Error("not used"); },
+        getOrCreate: () => {
+          throw new Error("not used");
+        },
         save: async () => {},
         invalidate: () => {},
       },
       activeTasks: new Map([
-        ["cli:direct", [{ cancel: () => { cancelled = true; return true; }, done: false }]],
+        [
+          "cli:direct",
+          [
+            {
+              cancel: () => {
+                cancelled = true;
+                return true;
+              },
+              done: false,
+            },
+          ],
+        ],
       ]),
       scheduleBackground: () => {},
       stop: () => {},

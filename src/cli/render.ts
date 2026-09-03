@@ -1,4 +1,3 @@
-
 // ---------------------------------------------------------------------------
 // ANSI escape helpers
 // ---------------------------------------------------------------------------
@@ -203,9 +202,7 @@ function renderBlockLine(l: string): string {
   const heading = l.match(/^(#{1,6})\s+(.*)$/);
   if (heading) {
     const codes =
-      heading[1]!.length === 1
-        ? [ansi.bold, theme.pink, ansi.underline]
-        : [ansi.bold, theme.pink];
+      heading[1]!.length === 1 ? [ansi.bold, theme.pink, ansi.underline] : [ansi.bold, theme.pink];
     return styled(inlineMarkdown(heading[2]!), ...codes);
   }
 

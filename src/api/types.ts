@@ -1,4 +1,3 @@
-
 export interface ContentPart {
   type: "text" | "image_url" | string;
   text?: string;
@@ -19,7 +18,6 @@ export interface ChatCompletionRequest {
   temperature?: number;
   max_tokens?: number;
 }
-
 
 export interface ChatChoice {
   index: number;
@@ -83,7 +81,12 @@ export interface ApiServerOpts {
 
   /** Permission registry for tool approval prompts. */
   permissions?: {
-    listPending(): Array<{ id: string; request: { tool: string; action: string; reason: string }; sessionKey: string; createdAt: string }>;
+    listPending(): Array<{
+      id: string;
+      request: { tool: string; action: string; reason: string };
+      sessionKey: string;
+      createdAt: string;
+    }>;
     resolve(id: string, allow: boolean): boolean;
   } | null;
 

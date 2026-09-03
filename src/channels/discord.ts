@@ -56,7 +56,10 @@ export class DiscordChannel extends BaseChannel {
 
   override async start(): Promise<void> {
     const token = this.config["token"] as string | undefined;
-    if (!token) { logger.error("Discord token not configured"); return; }
+    if (!token) {
+      logger.error("Discord token not configured");
+      return;
+    }
 
     this._running = true;
 
@@ -80,7 +83,10 @@ export class DiscordChannel extends BaseChannel {
     // Block until stopped
     await new Promise<void>((resolve) => {
       const check = setInterval(() => {
-        if (!this._running) { clearInterval(check); resolve(); }
+        if (!this._running) {
+          clearInterval(check);
+          resolve();
+        }
       }, 1000);
     });
   }
@@ -166,7 +172,7 @@ export class DiscordChannel extends BaseChannel {
     const isGroup = message.guild != null;
 
     if (isGroup) {
-      if (!await this._isGroupMessageForBot(message)) return;
+      if (!(await this._isGroupMessageForBot(message))) return;
     }
 
     const content = message.content || "[empty message]";
@@ -182,7 +188,9 @@ export class DiscordChannel extends BaseChannel {
     // Read receipt emoji (best effort)
     const emoji = (this.config["readReceiptEmoji"] as string | undefined) ?? "🕷️";
     if (emoji) {
-      message.react(emoji).catch(() => { /* ignore */ });
+      message.react(emoji).catch(() => {
+        /* ignore */
+      });
     }
 
     await this._handleMessage({ senderId, chatId, content, metadata });
@@ -204,7 +212,9 @@ export class DiscordChannel extends BaseChannel {
       try {
         const replied = await message.channel.messages.fetch(message.reference.messageId);
         if (replied.author.id === this._botUserId) return true;
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     return false;

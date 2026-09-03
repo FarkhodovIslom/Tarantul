@@ -1,4 +1,3 @@
-
 import { logger } from "./logger.js";
 
 const MAX_REPEAT_EXTERNAL_LOOKUPS = 2;
@@ -26,8 +25,9 @@ export function ensureNonemptyToolResult(toolName: string, content: unknown): un
     if (content.length === 0) return emptyToolResultMessage(toolName);
     // Check if all text blocks are empty
     const texts = content
-      .filter((b): b is Record<string, unknown> =>
-        typeof b === "object" && b !== null && (b as Record<string, unknown>)["type"] === "text",
+      .filter(
+        (b): b is Record<string, unknown> =>
+          typeof b === "object" && b !== null && (b as Record<string, unknown>)["type"] === "text",
       )
       .map((b) => String(b["text"] ?? ""));
     if (texts.length > 0 && texts.every((t) => !t.trim())) {
@@ -49,10 +49,7 @@ export function buildFinalizationRetryMessage(): Record<string, string> {
 // Repeated external lookup throttle
 // ---------------------------------------------------------------------------
 
-function externalLookupSignature(
-  toolName: string,
-  args: Record<string, unknown>,
-): string | null {
+function externalLookupSignature(toolName: string, args: Record<string, unknown>): string | null {
   if (toolName === "web_fetch") {
     const url = String(args["url"] ?? "").trim();
     if (url) return `web_fetch:${url.toLowerCase()}`;

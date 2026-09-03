@@ -1,4 +1,3 @@
-
 export interface ModelOverride {
   temperature?: number;
   maxTokens?: number;
@@ -14,7 +13,12 @@ export interface ProviderSpec {
 
   // which provider implementation to use
   // "openai_compat" | "anthropic" | "azure_openai" | "openai_codex" | "github_copilot"
-  readonly backend: "openai_compat" | "anthropic" | "azure_openai" | "openai_codex" | "github_copilot";
+  readonly backend:
+    | "openai_compat"
+    | "anthropic"
+    | "azure_openai"
+    | "openai_codex"
+    | "github_copilot";
 
   // extra env vars: [["VAR_NAME", "{api_key}"]]
   readonly envExtras: readonly (readonly [string, string])[];

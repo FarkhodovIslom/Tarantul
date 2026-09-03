@@ -1,4 +1,3 @@
-
 import { logger } from "../utils/logger.js";
 import { registerBuiltins } from "./registry.js";
 import type { BaseChannel } from "./base.js";
@@ -66,7 +65,7 @@ export class ChannelManager {
       if (allowFrom.length === 0) {
         throw new Error(
           `Channel "${name}" has empty allowFrom (denies all). ` +
-          `Set ["*"] to allow everyone, or add specific user IDs.`,
+            `Set ["*"] to allow everyone, or add specific user IDs.`,
         );
       }
     }
@@ -86,7 +85,9 @@ export class ChannelManager {
 
     const tasks = [...this._channels.entries()].map(([name, ch]) => {
       logger.info({ channel: name }, "starting channel…");
-      return ch.start().catch((e) => logger.error({ channel: name, err: e }, "channel start failed"));
+      return ch
+        .start()
+        .catch((e) => logger.error({ channel: name, err: e }, "channel start failed"));
     });
 
     await Promise.all(tasks);
@@ -99,8 +100,12 @@ export class ChannelManager {
     this._bus.closeOutbound();
 
     for (const [name, ch] of this._channels) {
-      try { await ch.stop(); logger.info({ channel: name }, "channel stopped"); }
-      catch (e) { logger.error({ channel: name, err: e }, "channel stop error"); }
+      try {
+        await ch.stop();
+        logger.info({ channel: name }, "channel stopped");
+      } catch (e) {
+        logger.error({ channel: name, err: e }, "channel stop error");
+      }
     }
   }
 
@@ -173,7 +178,10 @@ export class ChannelManager {
 
       if (sameTarget && isDelta && !meta["_stream_end"]) {
         chunks.push(next.content);
-        if (isEnd) { meta["_stream_end"] = true; break; }
+        if (isEnd) {
+          meta["_stream_end"] = true;
+          break;
+        }
       } else {
         extra.push(next);
         break;
@@ -192,11 +200,17 @@ export class ChannelManager {
         return;
       } catch (e) {
         if (attempt === maxAttempts - 1) {
-          logger.error({ channel: msg.channel, err: e, attempt: attempt + 1 }, "send failed permanently");
+          logger.error(
+            { channel: msg.channel, err: e, attempt: attempt + 1 },
+            "send failed permanently",
+          );
           return;
         }
         const delay = SEND_RETRY_DELAYS_MS[Math.min(attempt, SEND_RETRY_DELAYS_MS.length - 1)]!;
-        logger.warn({ channel: msg.channel, err: e, attempt: attempt + 1, delay }, "send failed, retrying");
+        logger.warn(
+          { channel: msg.channel, err: e, attempt: attempt + 1, delay },
+          "send failed, retrying",
+        );
         await new Promise<void>((r) => setTimeout(r, delay));
       }
     }

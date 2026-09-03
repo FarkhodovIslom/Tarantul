@@ -1,6 +1,13 @@
-
 import { join } from "node:path";
-import { existsSync, mkdirSync, renameSync, openSync, readSync, closeSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  renameSync,
+  openSync,
+  readSync,
+  closeSync,
+  unlinkSync,
+} from "node:fs";
 import { logger } from "../utils/logger.js";
 import { safeFilename, findLegalMessageStart } from "../utils/helpers.js";
 
@@ -350,9 +357,7 @@ export class SessionManager {
         const data = JSON.parse(line) as Record<string, unknown>;
         if (data["_type"] === "metadata") {
           metadata = (data["metadata"] as Record<string, unknown> | undefined) ?? {};
-          createdAt = data["created_at"]
-            ? new Date(data["created_at"] as string)
-            : undefined;
+          createdAt = data["created_at"] ? new Date(data["created_at"] as string) : undefined;
           lastConsolidated = (data["last_consolidated"] as number | undefined) ?? 0;
         } else {
           messages.push(data);

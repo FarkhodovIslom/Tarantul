@@ -175,7 +175,10 @@ export class SkillsLoader {
           const colonIdx = line.indexOf(":");
           if (colonIdx > 0) {
             const key = line.slice(0, colonIdx).trim();
-            const value = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, "");
+            const value = line
+              .slice(colonIdx + 1)
+              .trim()
+              .replace(/^["']|["']$/g, "");
             meta[key] = value;
           }
         }
@@ -250,15 +253,27 @@ export class SkillsLoader {
 // ---------------------------------------------------------------------------
 
 function safeReaddir(dir: string): string[] {
-  try { return readdirSync(dir); } catch { return []; }
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
 }
 
 function safeRead(path: string): string | null {
-  try { return readFileSync(path, "utf-8"); } catch { return null; }
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
 }
 
 function isDir(path: string): boolean {
-  try { return statSync(path).isDirectory(); } catch { return false; }
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function escapeXml(s: string): string {

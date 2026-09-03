@@ -182,9 +182,7 @@ export class AgentRunner {
           ...(response.reasoningContent != null
             ? { reasoningContent: response.reasoningContent }
             : {}),
-          ...(response.thinkingBlocks != null
-            ? { thinkingBlocks: response.thinkingBlocks }
-            : {}),
+          ...(response.thinkingBlocks != null ? { thinkingBlocks: response.thinkingBlocks } : {}),
         });
         buf.append(assistantMsg);
         toolsUsed.push(...response.toolCalls.map((tc) => tc.name));
@@ -306,9 +304,7 @@ export class AgentRunner {
           ...(response.reasoningContent != null
             ? { reasoningContent: response.reasoningContent }
             : {}),
-          ...(response.thinkingBlocks != null
-            ? { thinkingBlocks: response.thinkingBlocks }
-            : {}),
+          ...(response.thinkingBlocks != null ? { thinkingBlocks: response.thinkingBlocks } : {}),
         }),
       );
 
@@ -378,10 +374,7 @@ export class AgentRunner {
     return this.provider.chatWithRetry(baseOpts);
   }
 
-  private async _requestFinalizationRetry(
-    spec: AgentRunSpec,
-    messages: Record<string, unknown>[],
-  ) {
+  private async _requestFinalizationRetry(spec: AgentRunSpec, messages: Record<string, unknown>[]) {
     // Build a new array — this is intentional (finalization is rare, one-off).
     const retryMessages = [...messages, buildFinalizationRetryMessage()];
     return this.provider.chatWithRetry({

@@ -82,8 +82,11 @@ function isWithinDir(resolved: string, dirResolved: string): boolean {
 
 export class ExecTool extends Tool {
   override readonly name = "exec";
-  override readonly description = "Execute a shell command and return its output. Use with caution.";
-  override get exclusive(): boolean { return true; }
+  override readonly description =
+    "Execute a shell command and return its output. Use with caution.";
+  override get exclusive(): boolean {
+    return true;
+  }
 
   private readonly timeout: number;
   private readonly workingDir: string | null;
@@ -93,15 +96,17 @@ export class ExecTool extends Tool {
   private readonly pathAppend: string;
   private readonly askPermission: AskPermission | null;
 
-  constructor(opts: {
-    timeout?: number;
-    workingDir?: string | null;
-    denyPatterns?: RegExp[];
-    allowPatterns?: RegExp[];
-    restrictToWorkspace?: boolean;
-    pathAppend?: string;
-    askPermission?: AskPermission;
-  } = {}) {
+  constructor(
+    opts: {
+      timeout?: number;
+      workingDir?: string | null;
+      denyPatterns?: RegExp[];
+      allowPatterns?: RegExp[];
+      restrictToWorkspace?: boolean;
+      pathAppend?: string;
+      askPermission?: AskPermission;
+    } = {},
+  ) {
     super();
     this.timeout = opts.timeout ?? 60;
     this.workingDir = opts.workingDir ?? null;
@@ -129,7 +134,8 @@ export class ExecTool extends Tool {
 
   async execute(params: Record<string, unknown>): Promise<string> {
     const command = String(params["command"] ?? "");
-    const workingDir = (params["working_dir"] as string | undefined) ?? this.workingDir ?? process.cwd();
+    const workingDir =
+      (params["working_dir"] as string | undefined) ?? this.workingDir ?? process.cwd();
     const timeoutSec = Math.min(Number(params["timeout"] ?? this.timeout), MAX_TIMEOUT);
 
     const guardError = this.guardCommand(command, workingDir);

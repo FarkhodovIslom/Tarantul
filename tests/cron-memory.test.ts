@@ -375,15 +375,9 @@ describe("MemoryStore", () => {
       }),
     };
 
-    const messages = [
-      { role: "user", content: "test message", timestamp: "2025-01-01T10:00:00" },
-    ];
+    const messages = [{ role: "user", content: "test message", timestamp: "2025-01-01T10:00:00" }];
 
-    const { ok } = await store.consolidate(
-      messages,
-      mockProvider as never,
-      "mock",
-    );
+    const { ok } = await store.consolidate(messages, mockProvider as never, "mock");
     expect(ok).toBe(true);
 
     // Consolidation routes the history entry to today's daily log (OpenClaw-style).
